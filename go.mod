@@ -45,9 +45,9 @@ require (
 	github.com/hashicorp/go-hclog v1.5.0
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/hashicorp/go-plugin v1.4.3
-	github.com/hashicorp/go-retryablehttp v0.7.4
-	github.com/hashicorp/go-slug v0.12.2
-	github.com/hashicorp/go-tfe v1.34.0
+	github.com/hashicorp/go-retryablehttp v0.7.5
+	github.com/hashicorp/go-slug v0.13.2
+	github.com/hashicorp/go-tfe v1.40.0
 	github.com/hashicorp/go-uuid v1.0.3
 	github.com/hashicorp/go-version v1.6.0
 	github.com/hashicorp/hcl v1.0.0
@@ -258,8 +258,8 @@ require (
 	go.opentelemetry.io/otel/metric v1.20.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.0.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20221208152030-732eee02a75a // indirect
-	golang.org/x/sync v0.3.0 // indirect
-	golang.org/x/time v0.3.0 // indirect
+	golang.org/x/sync v0.5.0 // indirect
+	golang.org/x/time v0.4.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20230822172742-b8732ec3820d // indirect
