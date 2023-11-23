@@ -45,7 +45,7 @@ require (
 	github.com/hashicorp/go-hclog v1.5.0
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/hashicorp/go-plugin v1.4.3
-	github.com/hashicorp/go-retryablehttp v0.7.4
+	github.com/hashicorp/go-retryablehttp v0.7.5
 	github.com/hashicorp/go-slug v0.12.2
 	github.com/hashicorp/go-tfe v1.34.0
 	github.com/hashicorp/go-uuid v1.0.3
