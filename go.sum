@@ -1029,8 +1029,8 @@ github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts v1.0.588 h1:PlkFOAL
 github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts v1.0.588/go.mod h1:vPvXNb+zBZVJfZCIKWcYxLpGzgScKKgiPUArobWZ+nU=
 github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/tag v1.0.233 h1:5Tbi+jyZ2MojC6GK8V6hchwtnkP2IuENUTqSisbYOlA=
 github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/tag v1.0.233/go.mod h1:sX14+NSvMjOhNFaMtP2aDy6Bss8PyFXij21gpY6+DAs=
-github.com/tencentyun/cos-go-sdk-v5 v0.7.42 h1:Up1704BJjI5orycXKjpVpvuOInt9GC5pqY4knyE9Uds=
-github.com/tencentyun/cos-go-sdk-v5 v0.7.42/go.mod h1:LUFnaqRmGk6pEHOaRmdn2dCZR2j0cSsM5xowWFPTPao=
+github.com/tencentyun/cos-go-sdk-v5 v0.7.45 h1:5/ZGOv846tP6+2X7w//8QjLgH2KcUK+HciFbfjWquFU=
+github.com/tencentyun/cos-go-sdk-v5 v0.7.45/go.mod h1:DH9US8nB+AJXqwu/AMOrCFN1COv3dpytXuJWHgdg7kE=
 github.com/thanhpk/randstr v1.0.4 h1:IN78qu/bR+My+gHCvMEXhR/i5oriVHcTB/BJJIRTsNo=
 github.com/thanhpk/randstr v1.0.4/go.mod h1:M/H2P1eNLZzlDwAzpkkkUvoyNNMbzRGhESZuEQk3r0U=
 github.com/thlib/go-timezone-local v0.0.0-20210907160436-ef149e42d28e h1:BuzhfgfWQbX0dWzYzT1zsORLnHRv3bcRcsaUk0VmXA8=
