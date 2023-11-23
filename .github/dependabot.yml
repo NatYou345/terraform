@@ -10,7 +10,7 @@ updates:
     open-pull-requests-limit: 1000
     schedule:
       interval: "weekly"
-  - package-ecosystem: "go-mod" # See documentation for possible values
+  - package-ecosystem: "gomod" # See documentation for possible values
     directory: "/" # Location of package manifests
     open-pull-requests-limit: 0
     schedule:
