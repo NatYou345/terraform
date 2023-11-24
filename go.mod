@@ -87,7 +87,7 @@ require (
 	github.com/zclconf/go-cty v1.14.1
 	github.com/zclconf/go-cty-debug v0.0.0-20191215020915-b22d67c1ba0b
 	github.com/zclconf/go-cty-yaml v1.0.3
-	go.opentelemetry.io/contrib/exporters/autoexport v0.45.0
+	go.opentelemetry.io/contrib/exporters/autoexport v0.46.1
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.46.0
 	go.opentelemetry.io/otel v1.21.0
 	go.opentelemetry.io/otel/sdk v1.21.0
@@ -162,10 +162,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.19.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.25.1 // indirect
 	github.com/baiyubin/aliyun-sts-go-sdk v0.0.0-20180326062324-cfa1a18b161f // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bgentry/go-netrc v0.0.0-20140422174119-9fd32a8b3d3d // indirect
 	github.com/bmatcuk/doublestar/v4 v4.6.0 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.1.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/cli/go-gh v1.0.0 // indirect
 	github.com/cli/safeexec v1.0.0 // indirect
@@ -224,6 +226,7 @@ require (
 	github.com/masterzen/simplexml v0.0.0-20190410153822-31eea3082786 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-runewidth v0.0.13 // indirect
+	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/mergestat/timediff v0.0.3 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
 	github.com/mitchellh/go-testing-interface v1.14.1 // indirect
@@ -236,6 +239,10 @@ require (
 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
 	github.com/oklog/run v1.0.0 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
+	github.com/prometheus/client_golang v1.17.0 // indirect
+	github.com/prometheus/client_model v0.5.0 // indirect
+	github.com/prometheus/common v0.44.0 // indirect
+	github.com/prometheus/procfs v0.11.1 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/samber/lo v1.37.0 // indirect
 	github.com/satori/go.uuid v1.2.0 // indirect
@@ -252,10 +259,16 @@ require (
 	go.mongodb.org/mongo-driver v1.11.6 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws v0.46.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.19.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.19.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.19.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v0.44.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v0.44.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.21.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.21.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.21.0 // indirect
+	go.opentelemetry.io/otel/exporters/prometheus v0.44.0 // indirect
+	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v0.44.0 // indirect
+	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.21.0 // indirect
 	go.opentelemetry.io/otel/metric v1.21.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.21.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.0.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20221208152030-732eee02a75a // indirect
 	golang.org/x/sync v0.3.0 // indirect
