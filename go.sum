@@ -305,8 +305,8 @@ github.com/aws/aws-sdk-go v1.44.122 h1:p6mw01WBaNpbdP2xrisz5tIkcNwzj/HysobNoaAHj
 github.com/aws/aws-sdk-go v1.44.122/go.mod h1:y4AeaBuwd2Lk+GepC1E9v0qOiTws0MIWAX4oIKwKHZo=
 github.com/aws/aws-sdk-go-v2 v1.9.2/go.mod h1:cK/D0BBs0b/oWPIcX/Z/obahJK1TT7IPVjy53i/mX/4=
 github.com/aws/aws-sdk-go-v2 v1.21.0/go.mod h1:/RfNgGmRxI+iFOB1OeJUyxiU+9s88k3pfHvDagGEp0M=
-github.com/aws/aws-sdk-go-v2 v1.22.2 h1:lV0U8fnhAnPz8YcdmZVV60+tr6CakHzqA6P8T46ExJI=
-github.com/aws/aws-sdk-go-v2 v1.22.2/go.mod h1:Kd0OJtkW3Q0M0lUWGszapWjEvrXDzRW+D21JNsroB+c=
+github.com/aws/aws-sdk-go-v2 v1.23.1 h1:qXaFsOOMA+HsZtX8WoCa+gJnbyW7qyFFBlPqvTSzbaI=
+github.com/aws/aws-sdk-go-v2 v1.23.1/go.mod h1:i1XDttT4rnf6vxc9AuskLc6s7XBee8rlLilKlc03uAA=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.4.13/go.mod h1:gpAbvyDGQFozTEmlTFO8XcQKHzubdq0LzRyJpG6MiXM=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.5.0 h1:hHgLiIrTRtddC0AKcJr5s7i/hLgcpTt+q/FKxf1Zayk=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.5.0/go.mod h1:w4I/v3NOWgD+qvs1NPEwhd++1h3XPHFaVxasfY6HlYQ=
