@@ -27,7 +27,7 @@ require (
 	github.com/bmatcuk/doublestar v1.1.5
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
 	github.com/coreos/pkg v0.0.0-20180928190104-399ea9e2e55f
-	github.com/davecgh/go-spew v1.1.1
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/dylanmei/winrmtest v0.0.0-20210303004826-fbc9ae56efb6
 	github.com/go-test/deep v1.0.3
 	github.com/golang/mock v1.6.0
@@ -36,7 +36,7 @@ require (
 	github.com/hashicorp/aws-sdk-go-base/v2 v2.0.0-beta.45
 	github.com/hashicorp/cli v1.1.6
 	github.com/hashicorp/consul/api v1.13.0
-	github.com/hashicorp/consul/sdk v0.8.0
+	github.com/hashicorp/consul/sdk v0.15.1
 	github.com/hashicorp/copywrite v0.16.3
 	github.com/hashicorp/errwrap v1.1.0
 	github.com/hashicorp/go-azure-helpers v0.43.0
