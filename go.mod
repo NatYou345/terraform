@@ -53,7 +53,7 @@ require (
 	github.com/hashicorp/go-version v1.6.0
 	github.com/hashicorp/hcl v1.0.0
 	github.com/hashicorp/hcl/v2 v2.19.2-0.20231109190535-c964a71ca320
-	github.com/hashicorp/jsonapi v1.2.0
+	github.com/hashicorp/jsonapi v1.3.1
 	github.com/hashicorp/terraform-registry-address v0.2.0
 	github.com/hashicorp/terraform-svchost v0.1.1
 	github.com/jmespath/go-jmespath v0.4.0
