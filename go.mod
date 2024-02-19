@@ -22,7 +22,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.15.1
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.26.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.47.5
-	github.com/aws/smithy-go v1.19.0
+	github.com/aws/smithy-go v1.20.0
 	github.com/bgentry/speakeasy v0.1.0
 	github.com/bmatcuk/doublestar v1.1.5
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
