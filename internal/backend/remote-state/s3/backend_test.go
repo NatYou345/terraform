@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,14 +31,14 @@ import (
 	"github.com/hashicorp/aws-sdk-go-base/v2/servicemocks"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hcldec"
+	"github.com/zclconf/go-cty/cty"
+
 	"github.com/hashicorp/terraform/internal/backend"
 	"github.com/hashicorp/terraform/internal/configs/configschema"
 	"github.com/hashicorp/terraform/internal/configs/hcl2shim"
 	"github.com/hashicorp/terraform/internal/states"
 	"github.com/hashicorp/terraform/internal/states/remote"
 	"github.com/hashicorp/terraform/internal/tfdiags"
-	"github.com/zclconf/go-cty/cty"
-	"golang.org/x/exp/maps"
 )
 
 var (
@@ -2626,7 +2627,7 @@ func TestAssumeRole_PrepareConfigValidation(t *testing.T) {
 // an s3 backend Block
 //
 // This serves as a smoke test for use of the terraform_remote_state
-// data source with the s3 backend, replicating the the process that
+// data source with the s3 backend, replicating the process that
 // data source uses. The returned value is ignored as the object is
 // large (representing the entire s3 backend schema) and the focus of
 // this test is early detection of coercion failures.

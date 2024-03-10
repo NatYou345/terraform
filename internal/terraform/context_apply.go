@@ -121,11 +121,15 @@ func (c *Context) ApplyAndEval(plan *plans.Plan, config *configs.Config, opts *A
 		// Import is a no-op change during an apply (all the real action happens during the plan) but we'd
 		// like to show some helpful output that mirrors the way we show other changes.
 		if rc.Importing != nil {
+			hookResourceID := HookResourceIdentity{
+				Addr:         rc.Addr,
+				ProviderAddr: rc.ProviderAddr.Provider,
+			}
 			for _, h := range c.hooks {
 				// In future, we may need to call PostApplyImport separately elsewhere in the apply
 				// operation. For now, though, we'll call Pre and Post hooks together.
-				h.PreApplyImport(rc.Addr, *rc.Importing)
-				h.PostApplyImport(rc.Addr, *rc.Importing)
+				h.PreApplyImport(hookResourceID, *rc.Importing)
+				h.PostApplyImport(hookResourceID, *rc.Importing)
 			}
 		}
 	}
@@ -183,7 +187,7 @@ func (c *Context) ApplyAndEval(plan *plans.Plan, config *configs.Config, opts *A
 			"Applied changes may be incomplete",
 			`The plan was created with the -target option in effect, so some changes requested in the configuration may have been ignored and the output values may not be fully updated. Run the following command to verify that no other changes are pending:
     terraform plan
-	
+
 Note that the -target option is not suitable for routine use, and is provided only for exceptional situations such as recovering from errors or mistakes, or when Terraform specifically suggests to use it as part of an error message.`,
 		))
 	}

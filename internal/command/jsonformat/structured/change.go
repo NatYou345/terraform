@@ -4,6 +4,7 @@
 package structured
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 
@@ -89,6 +90,14 @@ type Change struct {
 	// that we should display. Any element/attribute not matched by this Matcher
 	// should be skipped.
 	RelevantAttributes attribute_path.Matcher
+
+	// NonLegacySchema must only be used when rendering the change to the CLI,
+	// and is otherwise ignored. This flag is set when we can be sure that the
+	// change originated from a resource which is not using the legacy SDK, so
+	// we don't need to hide changes between empty and null strings.
+	// NonLegacySchema is only switched to true by the renderer, because that is
+	// where we have most of the schema information to detect the condition.
+	NonLegacySchema bool
 }
 
 // FromJsonChange unmarshals the raw []byte values in the jsonplan.Change
@@ -273,8 +282,11 @@ func unmarshalGeneric(raw json.RawMessage) interface{} {
 		return nil
 	}
 
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber() // We support very big (> 2^64) numbers.
+
 	var out interface{}
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := decoder.Decode(&out); err != nil {
 		panic("unrecognized json type: " + err.Error())
 	}
 	return out

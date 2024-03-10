@@ -72,6 +72,13 @@ func (n *NodeAbstractResourceInstance) Path() addrs.ModuleInstance {
 	return n.Addr.Module
 }
 
+func (n *NodeAbstractResourceInstance) HookResourceIdentity() HookResourceIdentity {
+	return HookResourceIdentity{
+		Addr:         n.Addr,
+		ProviderAddr: n.ResolvedProvider.Provider,
+	}
+}
+
 // GraphNodeReferenceable
 func (n *NodeAbstractResourceInstance) ReferenceableAddrs() []addrs.Referenceable {
 	addr := n.ResourceInstanceAddr()
@@ -215,7 +222,7 @@ func (n *NodeAbstractResourceInstance) preApplyHook(ctx EvalContext, change *pla
 		plannedNewState := change.After
 
 		diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-			return h.PreApply(n.Addr, change.DeposedKey, change.Action, priorState, plannedNewState)
+			return h.PreApply(n.HookResourceIdentity(), change.DeposedKey, change.Action, priorState, plannedNewState)
 		}))
 		if diags.HasErrors() {
 			return diags
@@ -238,7 +245,7 @@ func (n *NodeAbstractResourceInstance) postApplyHook(ctx EvalContext, state *sta
 			newState = cty.NullVal(cty.DynamicPseudoType)
 		}
 		diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-			return h.PostApply(n.Addr, addrs.NotDeposed, newState, err)
+			return h.PostApply(n.HookResourceIdentity(), addrs.NotDeposed, newState, err)
 		}))
 	}
 
@@ -610,7 +617,7 @@ func (n *NodeAbstractResourceInstance) refresh(ctx EvalContext, deposedKey state
 
 	// Call pre-refresh hook
 	diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PreRefresh(absAddr, deposedKey, state.Value)
+		return h.PreRefresh(n.HookResourceIdentity(), deposedKey, state.Value)
 	}))
 	if diags.HasErrors() {
 		return state, diags
@@ -708,7 +715,7 @@ func (n *NodeAbstractResourceInstance) refresh(ctx EvalContext, deposedKey state
 
 	// Call post-refresh hook
 	diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PostRefresh(absAddr, deposedKey, priorVal, ret.Value)
+		return h.PostRefresh(n.HookResourceIdentity(), deposedKey, priorVal, ret.Value)
 	}))
 	if diags.HasErrors() {
 		return ret, diags
@@ -877,7 +884,7 @@ func (n *NodeAbstractResourceInstance) plan(
 
 	// Call pre-diff hook
 	diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PreDiff(n.Addr, addrs.NotDeposed, priorVal, proposedNewVal)
+		return h.PreDiff(n.HookResourceIdentity(), addrs.NotDeposed, priorVal, proposedNewVal)
 	}))
 	if diags.HasErrors() {
 		return nil, nil, keyData, diags
@@ -1235,7 +1242,7 @@ func (n *NodeAbstractResourceInstance) plan(
 
 	// Call post-refresh hook
 	diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PostDiff(n.Addr, addrs.NotDeposed, action, priorVal, plannedNewVal)
+		return h.PostDiff(n.HookResourceIdentity(), addrs.NotDeposed, action, priorVal, plannedNewVal)
 	}))
 	if diags.HasErrors() {
 		return nil, nil, keyData, diags
@@ -1562,7 +1569,7 @@ func (n *NodeAbstractResourceInstance) readDataSource(ctx EvalContext, configVal
 	log.Printf("[TRACE] readDataSource: %s configuration is complete, so reading from provider", n.Addr)
 
 	diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PreApply(n.Addr, addrs.NotDeposed, plans.Read, cty.NullVal(configVal.Type()), configVal)
+		return h.PreApply(n.HookResourceIdentity(), addrs.NotDeposed, plans.Read, cty.NullVal(configVal.Type()), configVal)
 	}))
 	if diags.HasErrors() {
 		return newVal, diags
@@ -1640,12 +1647,13 @@ func (n *NodeAbstractResourceInstance) readDataSource(ctx EvalContext, configVal
 		newVal = cty.UnknownAsNull(newVal)
 	}
 
+	pvm = dedupePathValueMarks(append(pvm, schema.ValueMarks(newVal, nil)...))
 	if len(pvm) > 0 {
 		newVal = newVal.MarkWithPaths(pvm)
 	}
 
 	diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PostApply(n.Addr, addrs.NotDeposed, newVal, diags.Err())
+		return h.PostApply(n.HookResourceIdentity(), addrs.NotDeposed, newVal, diags.Err())
 	}))
 
 	return newVal, diags
@@ -1729,6 +1737,7 @@ func (n *NodeAbstractResourceInstance) planDataSource(ctx EvalContext, checkRule
 	if configDiags.HasErrors() {
 		return nil, nil, keyData, diags
 	}
+	unmarkedConfigVal, unmarkedPaths := configVal.UnmarkDeepWithPaths()
 
 	check, nested := n.nestedInCheckBlock()
 	if nested {
@@ -1787,9 +1796,15 @@ func (n *NodeAbstractResourceInstance) planDataSource(ctx EvalContext, checkRule
 			reason = plans.ResourceInstanceReadBecauseDependencyPending
 		}
 
-		unmarkedConfigVal, configMarkPaths := configVal.UnmarkDeepWithPaths()
 		proposedNewVal := objchange.PlannedDataResourceObject(schema, unmarkedConfigVal)
-		proposedNewVal = proposedNewVal.MarkWithPaths(configMarkPaths)
+
+		// even though we are only returning the config value because we can't
+		// yet read the data source, we need to incorporate the schema marks so
+		// that downstream consumers can detect them when planning.
+		unmarkedPaths = dedupePathValueMarks(append(unmarkedPaths, schema.ValueMarks(proposedNewVal, nil)...))
+		if len(unmarkedPaths) > 0 {
+			proposedNewVal = proposedNewVal.MarkWithPaths(unmarkedPaths)
+		}
 
 		// Apply detects that the data source will need to be read by the After
 		// value containing unknowns from PlanDataResourceObject.
@@ -1811,7 +1826,7 @@ func (n *NodeAbstractResourceInstance) planDataSource(ctx EvalContext, checkRule
 		}
 
 		diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-			return h.PostDiff(n.Addr, addrs.NotDeposed, plans.Read, priorVal, proposedNewVal)
+			return h.PostDiff(n.HookResourceIdentity(), addrs.NotDeposed, plans.Read, priorVal, proposedNewVal)
 		}))
 
 		return plannedChange, plannedNewState, keyData, diags
@@ -1819,6 +1834,7 @@ func (n *NodeAbstractResourceInstance) planDataSource(ctx EvalContext, checkRule
 
 	// We have a complete configuration with no dependencies to wait on, so we
 	// can read the data source into the state.
+	// newVal is fully marked by the readDataSource method.
 	newVal, readDiags := n.readDataSource(ctx, configVal)
 
 	// Now we've loaded the data, and diags tells us whether we were successful
@@ -1848,9 +1864,16 @@ func (n *NodeAbstractResourceInstance) planDataSource(ctx EvalContext, checkRule
 		if readDiags.HasErrors() {
 			// If we had errors, then we can cover that up by marking the new
 			// state as unknown.
-			unmarkedConfigVal, configMarkPaths := configVal.UnmarkDeepWithPaths()
 			newVal = objchange.PlannedDataResourceObject(schema, unmarkedConfigVal)
-			newVal = newVal.MarkWithPaths(configMarkPaths)
+
+			// not only do we want to ensure this synthetic value has the marks,
+			// but since this is the value being returned from the data source
+			// we need to ensure the schema marks are added as well.
+			unmarkedPaths = dedupePathValueMarks(append(unmarkedPaths, schema.ValueMarks(newVal, nil)...))
+
+			if len(unmarkedPaths) > 0 {
+				newVal = newVal.MarkWithPaths(unmarkedPaths)
+			}
 
 			// We still want to report the check as failed even if we are still
 			// letting it run again during the apply stage.
@@ -2001,7 +2024,7 @@ func (n *NodeAbstractResourceInstance) applyDataSource(ctx EvalContext, planned 
 	diags = diags.Append(checkDiags)
 	if diags.HasErrors() {
 		diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-			return h.PostApply(n.Addr, addrs.NotDeposed, planned.Before, diags.Err())
+			return h.PostApply(n.HookResourceIdentity(), addrs.NotDeposed, planned.Before, diags.Err())
 		}))
 		return nil, keyData, diags // failed preconditions prevent further evaluation
 	}
@@ -2091,7 +2114,7 @@ func (n *NodeAbstractResourceInstance) evalApplyProvisioners(ctx EvalContext, st
 
 	// Call pre hook
 	diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PreProvisionInstance(n.Addr, state.Value)
+		return h.PreProvisionInstance(n.HookResourceIdentity(), state.Value)
 	}))
 	if diags.HasErrors() {
 		return diags
@@ -2107,7 +2130,7 @@ func (n *NodeAbstractResourceInstance) evalApplyProvisioners(ctx EvalContext, st
 
 	// Call post hook
 	return diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PostProvisionInstance(n.Addr, state.Value)
+		return h.PostProvisionInstance(n.HookResourceIdentity(), state.Value)
 	}))
 }
 
@@ -2217,7 +2240,7 @@ func (n *NodeAbstractResourceInstance) applyProvisioners(ctx EvalContext, state 
 		{
 			// Call pre hook
 			err := ctx.Hook(func(h Hook) (HookAction, error) {
-				return h.PreProvisionInstanceStep(n.Addr, prov.Type)
+				return h.PreProvisionInstanceStep(n.HookResourceIdentity(), prov.Type)
 			})
 			if err != nil {
 				return diags.Append(err)
@@ -2227,7 +2250,7 @@ func (n *NodeAbstractResourceInstance) applyProvisioners(ctx EvalContext, state 
 		// The output function
 		outputFn := func(msg string) {
 			ctx.Hook(func(h Hook) (HookAction, error) {
-				h.ProvisionOutput(n.Addr, prov.Type, msg)
+				h.ProvisionOutput(n.HookResourceIdentity(), prov.Type, msg)
 				return HookActionContinue, nil
 			})
 		}
@@ -2246,7 +2269,7 @@ func (n *NodeAbstractResourceInstance) applyProvisioners(ctx EvalContext, state 
 		if len(configMarks) > 0 {
 			outputFn = func(msg string) {
 				ctx.Hook(func(h Hook) (HookAction, error) {
-					h.ProvisionOutput(n.Addr, prov.Type, "(output suppressed due to sensitive value in config)")
+					h.ProvisionOutput(n.HookResourceIdentity(), prov.Type, "(output suppressed due to sensitive value in config)")
 					return HookActionContinue, nil
 				})
 			}
@@ -2262,7 +2285,7 @@ func (n *NodeAbstractResourceInstance) applyProvisioners(ctx EvalContext, state 
 
 		// Call post hook
 		hookErr := ctx.Hook(func(h Hook) (HookAction, error) {
-			return h.PostProvisionInstanceStep(n.Addr, prov.Type, applyDiags.Err())
+			return h.PostProvisionInstanceStep(n.HookResourceIdentity(), prov.Type, applyDiags.Err())
 		})
 
 		switch prov.OnFailure {

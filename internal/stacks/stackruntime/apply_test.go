@@ -5,23 +5,24 @@ package stackruntime
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"path"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty-debug/ctydebug"
 	"github.com/zclconf/go-cty/cty"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/hashicorp/terraform/internal/addrs"
 	terraformProvider "github.com/hashicorp/terraform/internal/builtin/providers/terraform"
+	"github.com/hashicorp/terraform/internal/lang/marks"
 	"github.com/hashicorp/terraform/internal/providers"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
 	"github.com/hashicorp/terraform/internal/stacks/stackplan"
+	stacks_testing_provider "github.com/hashicorp/terraform/internal/stacks/stackruntime/testing"
 	"github.com/hashicorp/terraform/internal/stacks/stackstate"
 	"github.com/hashicorp/terraform/internal/states"
 	"github.com/hashicorp/terraform/internal/tfdiags"
@@ -29,23 +30,6 @@ import (
 
 func TestApplyWithRemovedResource(t *testing.T) {
 	fakePlanTimestamp, err := time.Parse(time.RFC3339, "1994-09-05T08:50:00Z")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	attrs := map[string]interface{}{
-		"id": "FE1D5830765C",
-		"input": map[string]interface{}{
-			"value": "hello",
-			"type":  "string",
-		},
-		"output": map[string]interface{}{
-			"value": nil,
-			"type":  "string",
-		},
-		"triggers_replace": nil,
-	}
-	attrsJSON, err := json.Marshal(attrs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +79,19 @@ func TestApplyWithRemovedResource(t *testing.T) {
 				}).
 				SetResourceInstanceObjectSrc(states.ResourceInstanceObjectSrc{
 					SchemaVersion: 0,
-					AttrsJSON:     attrsJSON,
-					Status:        states.ObjectReady,
+					AttrsJSON: mustMarshalJSONAttrs(map[string]interface{}{
+						"id": "FE1D5830765C",
+						"input": map[string]interface{}{
+							"value": "hello",
+							"type":  "string",
+						},
+						"output": map[string]interface{}{
+							"value": nil,
+							"type":  "string",
+						},
+						"triggers_replace": nil,
+					}),
+					Status: states.ObjectReady,
 				}).
 				SetProviderAddr(addrs.AbsProviderConfig{
 					Module:   addrs.RootModule,
@@ -142,7 +137,6 @@ func TestApplyWithRemovedResource(t *testing.T) {
 	diagsCh = make(chan tfdiags.Diagnostic)
 
 	applyResp := ApplyResponse{
-		Complete:       false,
 		AppliedChanges: applyChangesCh,
 		Diagnostics:    diagsCh,
 	}
@@ -151,10 +145,6 @@ func TestApplyWithRemovedResource(t *testing.T) {
 	applyChanges, applyDiags := collectApplyOutput(applyChangesCh, diagsCh)
 	if len(applyDiags) > 0 {
 		t.Fatalf("expected no diagnostics, got %s", applyDiags.ErrWithWarnings())
-	}
-
-	if len(applyChanges) != 2 {
-		t.Fatalf("expected 2 applied changes, got %d", len(applyChanges))
 	}
 
 	wantChanges := []stackstate.AppliedChange{
@@ -206,8 +196,307 @@ func TestApplyWithRemovedResource(t *testing.T) {
 	}
 
 	sort.SliceStable(applyChanges, func(i, j int) bool {
-		// An arbitrary sort just to make the result stable for comparison.
-		return fmt.Sprintf("%T", applyChanges[i]) < fmt.Sprintf("%T", applyChanges[j])
+		return appliedChangeSortKey(applyChanges[i]) < appliedChangeSortKey(applyChanges[j])
+	})
+
+	if diff := cmp.Diff(wantChanges, applyChanges, ctydebug.CmpOptions, cmpCollectionsSet); diff != "" {
+		t.Errorf("wrong changes\n%s", diff)
+	}
+}
+
+func TestApplyWithSensitivePropagation(t *testing.T) {
+	ctx := context.Background()
+	cfg := loadMainBundleConfigForTest(t, path.Join("with-single-input", "sensitive-input"))
+
+	fakePlanTimestamp, err := time.Parse(time.RFC3339, "1991-08-25T20:57:08Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changesCh := make(chan stackplan.PlannedChange)
+	diagsCh := make(chan tfdiags.Diagnostic)
+	req := PlanRequest{
+		Config: cfg,
+		ProviderFactories: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("testing"): func() (providers.Interface, error) {
+				return stacks_testing_provider.NewProvider(), nil
+			},
+		},
+
+		ForcePlanTimestamp: &fakePlanTimestamp,
+
+		InputValues: map[stackaddrs.InputVariable]ExternalInputValue{
+			stackaddrs.InputVariable{Name: "id"}: {
+				Value: cty.StringVal("bb5cf32312ec"),
+			},
+		},
+	}
+	resp := PlanResponse{
+		PlannedChanges: changesCh,
+		Diagnostics:    diagsCh,
+	}
+
+	go Plan(ctx, &req, &resp)
+	planChanges, diags := collectPlanOutput(changesCh, diagsCh)
+	if len(diags) > 0 {
+		t.Fatalf("expected no diagnostics, got %s", diags.ErrWithWarnings())
+	}
+
+	var raw []*anypb.Any
+	for _, change := range planChanges {
+		proto, err := change.PlannedChangeProto()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, proto.Raw...)
+	}
+
+	applyReq := ApplyRequest{
+		Config:  cfg,
+		RawPlan: raw,
+		ProviderFactories: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("testing"): func() (providers.Interface, error) {
+				return stacks_testing_provider.NewProvider(), nil
+			},
+		},
+	}
+
+	applyChangesCh := make(chan stackstate.AppliedChange)
+	diagsCh = make(chan tfdiags.Diagnostic)
+
+	applyResp := ApplyResponse{
+		AppliedChanges: applyChangesCh,
+		Diagnostics:    diagsCh,
+	}
+
+	go Apply(ctx, &applyReq, &applyResp)
+	applyChanges, applyDiags := collectApplyOutput(applyChangesCh, diagsCh)
+	if len(applyDiags) > 0 {
+		t.Fatalf("expected no diagnostics, got %s", applyDiags.ErrWithWarnings())
+	}
+
+	wantChanges := []stackstate.AppliedChange{
+		&stackstate.AppliedChangeComponentInstance{
+			ComponentAddr: stackaddrs.AbsComponent{
+				Item: stackaddrs.Component{
+					Name: "self",
+				},
+			},
+			ComponentInstanceAddr: stackaddrs.AbsComponentInstance{
+				Item: stackaddrs.ComponentInstance{
+					Component: stackaddrs.Component{
+						Name: "self",
+					},
+				},
+			},
+			OutputValues: make(map[addrs.OutputValue]cty.Value),
+		},
+		&stackstate.AppliedChangeResourceInstanceObject{
+			ResourceInstanceObjectAddr: stackaddrs.AbsResourceInstanceObject{
+				Component: stackaddrs.AbsComponentInstance{
+					Item: stackaddrs.ComponentInstance{
+						Component: stackaddrs.Component{
+							Name: "self",
+						},
+					},
+				},
+				Item: addrs.AbsResourceInstanceObject{
+					ResourceInstance: addrs.AbsResourceInstance{
+						Resource: addrs.ResourceInstance{
+							Resource: addrs.Resource{
+								Mode: addrs.ManagedResourceMode,
+								Type: "testing_resource",
+								Name: "data",
+							},
+						},
+					},
+				},
+			},
+			NewStateSrc: &states.ResourceInstanceObjectSrc{
+				AttrsJSON: mustMarshalJSONAttrs(map[string]interface{}{
+					"id":    "bb5cf32312ec",
+					"value": "secret",
+				}),
+				AttrSensitivePaths: []cty.PathValueMarks{
+					{
+						Path:  cty.GetAttrPath("value"),
+						Marks: cty.NewValueMarks(marks.Sensitive),
+					},
+				},
+				Status:       states.ObjectReady,
+				Dependencies: make([]addrs.ConfigResource, 0),
+			},
+			ProviderConfigAddr: addrs.AbsProviderConfig{
+				Provider: addrs.NewDefaultProvider("testing"),
+			},
+			Schema: stacks_testing_provider.TestingResourceSchema,
+		},
+		&stackstate.AppliedChangeComponentInstance{
+			ComponentAddr: stackaddrs.AbsComponent{
+				Item: stackaddrs.Component{
+					Name: "sensitive",
+				},
+			},
+			ComponentInstanceAddr: stackaddrs.AbsComponentInstance{
+				Item: stackaddrs.ComponentInstance{
+					Component: stackaddrs.Component{
+						Name: "sensitive",
+					},
+				},
+			},
+			OutputValues: map[addrs.OutputValue]cty.Value{
+				addrs.OutputValue{Name: "out"}: cty.StringVal("secret").Mark(marks.Sensitive),
+			},
+		},
+	}
+
+	sort.SliceStable(applyChanges, func(i, j int) bool {
+		return appliedChangeSortKey(applyChanges[i]) < appliedChangeSortKey(applyChanges[j])
+	})
+
+	if diff := cmp.Diff(wantChanges, applyChanges, ctydebug.CmpOptions, cmpCollectionsSet); diff != "" {
+		t.Errorf("wrong changes\n%s", diff)
+	}
+}
+
+func TestApplyWithCheckableObjects(t *testing.T) {
+	ctx := context.Background()
+	cfg := loadMainBundleConfigForTest(t, "checkable-objects")
+
+	fakePlanTimestamp, err := time.Parse(time.RFC3339, "1991-08-25T20:57:08Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changesCh := make(chan stackplan.PlannedChange)
+	diagsCh := make(chan tfdiags.Diagnostic)
+	req := PlanRequest{
+		Config: cfg,
+		ProviderFactories: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("testing"): func() (providers.Interface, error) {
+				return stacks_testing_provider.NewProvider(), nil
+			},
+		},
+
+		ForcePlanTimestamp: &fakePlanTimestamp,
+
+		InputValues: map[stackaddrs.InputVariable]ExternalInputValue{
+			stackaddrs.InputVariable{Name: "foo"}: {
+				Value: cty.StringVal("bar"),
+			},
+		},
+	}
+	resp := PlanResponse{
+		PlannedChanges: changesCh,
+		Diagnostics:    diagsCh,
+	}
+	var wantDiags tfdiags.Diagnostics
+	wantDiags = wantDiags.Append(&hcl.Diagnostic{
+		Severity: hcl.DiagWarning,
+
+		Summary: "Check block assertion failed",
+		Detail:  `value must be 'baz'`,
+		Subject: &hcl.Range{
+			Filename: mainBundleSourceAddrStr("checkable-objects/checkable-objects.tf"),
+			Start:    hcl.Pos{Line: 32, Column: 21, Byte: 532},
+			End:      hcl.Pos{Line: 32, Column: 57, Byte: 568},
+		},
+	})
+
+	go Plan(ctx, &req, &resp)
+	planChanges, planDiags := collectPlanOutput(changesCh, diagsCh)
+
+	if diff := cmp.Diff(wantDiags.ForRPC(), planDiags.ForRPC()); diff != "" {
+		t.Errorf("wrong diagnostics\n%s", diff)
+	}
+
+	var raw []*anypb.Any
+	for _, change := range planChanges {
+		proto, err := change.PlannedChangeProto()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, proto.Raw...)
+	}
+
+	applyReq := ApplyRequest{
+		Config:  cfg,
+		RawPlan: raw,
+		ProviderFactories: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("testing"): func() (providers.Interface, error) {
+				return stacks_testing_provider.NewProvider(), nil
+			},
+		},
+	}
+
+	applyChangesCh := make(chan stackstate.AppliedChange)
+	diagsCh = make(chan tfdiags.Diagnostic)
+
+	applyResp := ApplyResponse{
+		AppliedChanges: applyChangesCh,
+		Diagnostics:    diagsCh,
+	}
+
+	go Apply(ctx, &applyReq, &applyResp)
+	applyChanges, applyDiags := collectApplyOutput(applyChangesCh, diagsCh)
+	if diff := cmp.Diff(wantDiags.ForRPC(), applyDiags.ForRPC()); diff != "" {
+		t.Errorf("wrong diagnostics\n%s", diff)
+	}
+
+	wantChanges := []stackstate.AppliedChange{
+		&stackstate.AppliedChangeComponentInstance{
+			ComponentAddr: stackaddrs.AbsComponent{
+				Item: stackaddrs.Component{
+					Name: "single",
+				},
+			},
+			ComponentInstanceAddr: stackaddrs.AbsComponentInstance{
+				Item: stackaddrs.ComponentInstance{
+					Component: stackaddrs.Component{
+						Name: "single",
+					},
+				},
+			},
+			OutputValues: make(map[addrs.OutputValue]cty.Value),
+		},
+		&stackstate.AppliedChangeResourceInstanceObject{
+			ResourceInstanceObjectAddr: stackaddrs.AbsResourceInstanceObject{
+				Component: stackaddrs.AbsComponentInstance{
+					Item: stackaddrs.ComponentInstance{
+						Component: stackaddrs.Component{
+							Name: "single",
+						},
+					},
+				},
+				Item: addrs.AbsResourceInstanceObject{
+					ResourceInstance: addrs.AbsResourceInstance{
+						Resource: addrs.ResourceInstance{
+							Resource: addrs.Resource{
+								Mode: addrs.ManagedResourceMode,
+								Type: "testing_resource",
+								Name: "main",
+							},
+						},
+					},
+				},
+			},
+			NewStateSrc: &states.ResourceInstanceObjectSrc{
+				AttrsJSON: mustMarshalJSONAttrs(map[string]interface{}{
+					"id":    "test",
+					"value": "bar",
+				}),
+				Status:       states.ObjectReady,
+				Dependencies: make([]addrs.ConfigResource, 0),
+			},
+			ProviderConfigAddr: addrs.AbsProviderConfig{
+				Provider: addrs.NewDefaultProvider("testing"),
+			},
+			Schema: stacks_testing_provider.TestingResourceSchema,
+		},
+	}
+
+	sort.SliceStable(applyChanges, func(i, j int) bool {
+		return appliedChangeSortKey(applyChanges[i]) < appliedChangeSortKey(applyChanges[j])
 	})
 
 	if diff := cmp.Diff(wantChanges, applyChanges, ctydebug.CmpOptions, cmpCollectionsSet); diff != "" {

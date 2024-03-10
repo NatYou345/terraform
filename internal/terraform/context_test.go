@@ -16,6 +16,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/hashicorp/go-version"
+	"github.com/zclconf/go-cty/cty"
+
 	"github.com/hashicorp/terraform/internal/addrs"
 	"github.com/hashicorp/terraform/internal/configs"
 	"github.com/hashicorp/terraform/internal/configs/configload"
@@ -24,12 +26,12 @@ import (
 	"github.com/hashicorp/terraform/internal/plans"
 	"github.com/hashicorp/terraform/internal/plans/planfile"
 	"github.com/hashicorp/terraform/internal/providers"
+	provider_testing "github.com/hashicorp/terraform/internal/providers/testing"
 	"github.com/hashicorp/terraform/internal/provisioners"
 	"github.com/hashicorp/terraform/internal/states"
 	"github.com/hashicorp/terraform/internal/states/statefile"
 	"github.com/hashicorp/terraform/internal/tfdiags"
 	tfversion "github.com/hashicorp/terraform/version"
-	"github.com/zclconf/go-cty/cty"
 )
 
 var (
@@ -104,7 +106,7 @@ func TestNewContextRequiredVersion(t *testing.T) {
 				t.Fatalf("unexpected NewContext errors: %s", diags.Err())
 			}
 
-			diags = c.Validate(mod)
+			diags = c.Validate(mod, nil)
 			if diags.HasErrors() != tc.Err {
 				t.Fatalf("err: %s", diags.Err())
 			}
@@ -163,7 +165,7 @@ terraform {}
 				t.Fatalf("unexpected NewContext errors: %s", diags.Err())
 			}
 
-			diags = c.Validate(mod)
+			diags = c.Validate(mod, nil)
 			if diags.HasErrors() != tc.Err {
 				t.Fatalf("err: %s", diags.Err())
 			}
@@ -208,7 +210,7 @@ resource "implicit_thing" "b" {
 	// require doing some pretty weird things that aren't common enough to
 	// be worth the complexity to check for them.
 
-	validateDiags := ctx.Validate(cfg)
+	validateDiags := ctx.Validate(cfg, nil)
 	_, planDiags := ctx.Plan(cfg, nil, DefaultPlanOpts)
 
 	tests := map[string]tfdiags.Diagnostics{
@@ -252,11 +254,11 @@ resource "implicit_thing" "b" {
 }
 
 func TestContext_preloadedProviderSchemas(t *testing.T) {
-	var provider *MockProvider
+	var provider *provider_testing.MockProvider
 	{
 		var diags tfdiags.Diagnostics
 		diags = diags.Append(fmt.Errorf("mustn't really call GetProviderSchema"))
-		provider = &MockProvider{
+		provider = &provider_testing.MockProvider{
 			GetProviderSchemaResponse: &providers.GetProviderSchemaResponse{
 				Diagnostics: diags,
 			},
@@ -410,8 +412,8 @@ func testDiffFn(req providers.PlanResourceChangeRequest) (resp providers.PlanRes
 	return
 }
 
-func testProvider(prefix string) *MockProvider {
-	p := new(MockProvider)
+func testProvider(prefix string) *provider_testing.MockProvider {
+	p := new(provider_testing.MockProvider)
 	p.GetProviderSchemaResponse = testProviderSchema(prefix)
 
 	return p
@@ -473,7 +475,7 @@ func testCheckDeadlock(t *testing.T, f func()) {
 }
 
 func testProviderSchema(name string) *providers.GetProviderSchemaResponse {
-	return getProviderSchemaResponseFromProviderSchema(&ProviderSchema{
+	return getProviderSchemaResponseFromProviderSchema(&providerSchema{
 		Provider: &configschema.Block{
 			Attributes: map[string]*configschema.Attribute{
 				"region": {
