@@ -75,9 +75,9 @@ require (
 	github.com/pkg/browser v0.0.0-20201207095918-0426ae3fba23
 	github.com/posener/complete v1.2.3
 	github.com/spf13/afero v1.9.3
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.588
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.872
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts v1.0.588
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/tag v1.0.233
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/tag v1.0.872
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.42
 	github.com/tombuildsstuff/giovanni v0.15.1
 	github.com/xanzy/ssh-agent v0.3.1
