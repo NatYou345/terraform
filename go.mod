@@ -51,7 +51,7 @@ require (
 	github.com/hashicorp/go-uuid v1.0.3
 	github.com/hashicorp/go-version v1.6.0
 	github.com/hashicorp/hcl v1.0.0
-	github.com/hashicorp/hcl/v2 v2.20.0
+	github.com/hashicorp/hcl/v2 v2.20.1
 	github.com/hashicorp/jsonapi v1.2.0
 	github.com/hashicorp/terraform-registry-address v0.2.0
 	github.com/hashicorp/terraform-svchost v0.1.1
@@ -237,7 +237,6 @@ require (
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/samber/lo v1.37.0 // indirect
 	github.com/satori/go.uuid v1.2.0 // indirect
-	github.com/sergi/go-diff v1.2.0 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/spf13/cast v1.5.0 // indirect
 	github.com/spf13/cobra v1.6.1 // indirect
