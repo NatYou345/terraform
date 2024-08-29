@@ -5499,11 +5499,6 @@ func TestContext2Plan_ephemeralInResource(t *testing.T) {
 	m := testModuleInline(t, map[string]string{
 		"main.tf": `
 			terraform {
-				# Ephemeral values are currently experimental. Remove this
-				# argument if the feature gets stablized and this test otherwise
-				# still makes sense for what was stabilized.
-				experiments = [ephemeral_values]
-
 				required_providers {
 					beep = {
 						source = "terraform.io/builtin/beep"
@@ -5555,10 +5550,10 @@ func TestContext2Plan_ephemeralInResource(t *testing.T) {
 		Subject: &hcl.Range{
 			Filename: filepath.Join(m.Module.SourceDir, "main.tf"),
 			Start: hcl.Pos{
-				Line: 21, Column: 10, Byte: 442,
+				Line: 16, Column: 10, Byte: 223,
 			},
 			End: hcl.Pos{
-				Line: 21, Column: 16, Byte: 448,
+				Line: 16, Column: 16, Byte: 229,
 			},
 		},
 	})
@@ -5569,10 +5564,10 @@ func TestContext2Plan_ephemeralInResource(t *testing.T) {
 		Subject: &hcl.Range{
 			Filename: filepath.Join(m.Module.SourceDir, "main.tf"),
 			Start: hcl.Pos{
-				Line: 25, Column: 10, Byte: 488,
+				Line: 20, Column: 10, Byte: 269,
 			},
 			End: hcl.Pos{
-				Line: 25, Column: 16, Byte: 494,
+				Line: 20, Column: 16, Byte: 275,
 			},
 		},
 	})
@@ -5602,11 +5597,6 @@ func TestContext2Plan_ephemeralInProviderConfig(t *testing.T) {
 	m := testModuleInline(t, map[string]string{
 		"main.tf": `
 			terraform {
-				# Ephemeral values are currently experimental. Remove this
-				# argument if the feature gets stablized and this test otherwise
-				# still makes sense for what was stabilized.
-				experiments = [ephemeral_values]
-
 				required_providers {
 					beep = {
 						source = "terraform.io/builtin/beep"
@@ -5781,5 +5771,132 @@ resource "test_object" "obj" {
 	_, diags := ctx.Plan(m, state, nil)
 	if len(diags) > 0 {
 		t.Errorf("unexpected diags\n%s", diags)
+	}
+}
+
+func TestContext2Plan_selfReferences(t *testing.T) {
+	tcs := []struct {
+		attribute string
+	}{
+		// Note here, the type returned by the lookup doesn't really matter as
+		// we should safely fail before we even get to type checking.
+		{
+			attribute: "count = test_object.a[0].test_string",
+		},
+		{
+			attribute: "count = test_object.a[*].test_string",
+		},
+		{
+			attribute: "for_each = test_object.a[0].test_string",
+		},
+		{
+			attribute: "for_each = test_object.a[*].test_string",
+		},
+		// Even though the can and try functions might normally allow some
+		// fairly crazy things, we're still going to put a stop to a self
+		// reference since it is more akin to a compilation error than some kind
+		// of dynamic exception.
+		{
+			attribute: "for_each = can(test_object.a[0].test_string) ? 0 : 1",
+		},
+		{
+			attribute: "count = try(test_object.a[0].test_string, 0)",
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.attribute, func(t *testing.T) {
+			tmpl := `
+resource "test_object" "a" {
+  %%attribute%%
+}
+`
+			module := strings.ReplaceAll(tmpl, "%%attribute%%", tc.attribute)
+			m := testModuleInline(t, map[string]string{
+				"main.tf": module,
+			})
+
+			p := simpleMockProvider()
+			ctx := testContext2(t, &ContextOpts{
+				Providers: map[addrs.Provider]providers.Factory{
+					// The providers never actually going to get called here, we should
+					// catch the error long before anything happens.
+					addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+				},
+			})
+
+			_, diags := ctx.Plan(m, states.NewState(), DefaultPlanOpts)
+			if len(diags) != 1 {
+				t.Fatalf("expected one diag, got %d: %s", len(diags), diags.ErrWithWarnings())
+			}
+
+			got, want := diags.Err().Error(), "Self-referential block: Configuration for test_object.a may not refer to itself."
+			if cmp.Diff(want, got) != "" {
+				t.Fatalf("unexpected error\n%s", cmp.Diff(want, got))
+			}
+		})
+	}
+
+}
+
+func TestContext2Plan_destroySkipsVariableValidations(t *testing.T) {
+	// this validation cannot block destroy, because we can't be sure arbitrary
+	// expressions can be evaluated at all during destroy.
+	m := testModuleInline(t, map[string]string{
+		"main.tf": `
+variable "input" {
+  type = string
+
+  validation {
+    condition = var.input == "foo"
+    error_message = "bad input"
+  }
+}
+
+resource "test_object" "a" {
+  test_string = var.input
+}
+`,
+	})
+
+	p := simpleMockProvider()
+	ctx := testContext2(t, &ContextOpts{
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+		},
+	})
+
+	plan, diags := ctx.Plan(m, states.BuildState(func(state *states.SyncState) {
+		state.SetResourceInstanceCurrent(
+			mustResourceInstanceAddr("test_object.a"),
+			&states.ResourceInstanceObjectSrc{
+				Status:    states.ObjectReady,
+				AttrsJSON: []byte(`{"test_string":"foo"}`),
+			},
+			mustProviderConfig(`provider["registry.terraform.io/hashicorp/test"]`),
+		)
+	}), &PlanOpts{
+		Mode: plans.DestroyMode,
+		SetVariables: InputValues{
+			"input": {
+				Value:       cty.StringVal("foo"),
+				SourceType:  ValueFromCLIArg,
+				SourceRange: tfdiags.SourceRange{},
+			},
+		},
+	})
+	if diags.HasErrors() {
+		t.Errorf("expected no errors, but got %s", diags)
+	}
+
+	planResult := plan.Checks.GetObjectResult(addrs.AbsInputVariableInstance{
+		Variable: addrs.InputVariable{
+			Name: "input",
+		},
+		Module: addrs.RootModuleInstance,
+	})
+
+	if planResult.Status != checks.StatusUnknown {
+		// checks should not have been evaluated, because the variable is not required for destroy.
+		t.Errorf("expected checks to be pass but was %s", planResult.Status)
 	}
 }

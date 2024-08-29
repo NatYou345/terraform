@@ -4,11 +4,13 @@
 package stackruntime
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/go-slug/sourceaddrs"
 	"github.com/hashicorp/go-slug/sourcebundle"
 	"github.com/zclconf/go-cty/cty"
@@ -92,7 +94,7 @@ func expectDiagnosticsForTest(t *testing.T, actual tfdiags.Diagnostics, expected
 	t.Helper()
 
 	max := len(expected)
-	if len(actual) < max {
+	if len(actual) > max {
 		max = len(actual)
 	}
 
@@ -202,9 +204,54 @@ func plannedChangeSortKey(change stackplan.PlannedChange) string {
 		// There should only be a single applyable marker in a plan, so we can
 		// just return a static string here.
 		return "applyable"
+	case *stackplan.PlannedChangePlannedTimestamp:
+		// There should only be a single timestamp in a plan, so we can
+		// just return a static string here.
+		return "planned-timestamp"
+	case *stackplan.PlannedChangeProviderFunctionResults:
+		// There should only be a single timestamp in a plan, so we can just
+		// return a simple string.
+		return "function-results"
 	default:
 		// This is only going to happen during tests, so we can panic here.
 		panic(fmt.Errorf("unrecognized planned change type: %T", change))
+	}
+}
+
+func diagnosticSortFunc(diags tfdiags.Diagnostics) func(i, j int) bool {
+	sortDescription := func(i, j tfdiags.Description) bool {
+		if i.Summary != j.Summary {
+			return i.Summary < j.Summary
+		}
+		return i.Detail < j.Detail
+	}
+
+	sortPos := func(i, j tfdiags.SourcePos) bool {
+		if i.Line != j.Line {
+			return i.Line < j.Line
+		}
+		return i.Column < j.Column
+	}
+
+	sortRange := func(i, j *tfdiags.SourceRange) bool {
+		if i.Filename != j.Filename {
+			return i.Filename < j.Filename
+		}
+		if !cmp.Equal(i.Start, j.Start) {
+			return sortPos(i.Start, j.Start)
+		}
+		return sortPos(i.End, j.End)
+	}
+
+	return func(i, j int) bool {
+		id, jd := diags[i], diags[j]
+		if id.Severity() != jd.Severity() {
+			return id.Severity() == tfdiags.Error
+		}
+		if !cmp.Equal(id.Description(), jd.Description()) {
+			return sortDescription(id.Description(), jd.Description())
+		}
+		return sortRange(id.Source().Subject, jd.Source().Subject)
 	}
 }
 
@@ -231,12 +278,28 @@ func mustAbsResourceInstanceObject(addr string) stackaddrs.AbsResourceInstanceOb
 	return ret
 }
 
+func mustAbsResourceInstanceObjectPtr(addr string) *stackaddrs.AbsResourceInstanceObject {
+	ret := mustAbsResourceInstanceObject(addr)
+	return &ret
+}
+
 func mustAbsComponentInstance(addr string) stackaddrs.AbsComponentInstance {
 	ret, diags := stackaddrs.ParseAbsComponentInstanceStr(addr)
 	if len(diags) > 0 {
 		panic(fmt.Sprintf("failed to parse component instance address %q: %s", addr, diags))
 	}
 	return ret
+}
+
+func mustAbsComponent(addr string) stackaddrs.AbsComponent {
+	ret, diags := stackaddrs.ParseAbsComponentInstanceStr(addr)
+	if len(diags) > 0 {
+		panic(fmt.Sprintf("failed to parse component instance address %q: %s", addr, diags))
+	}
+	return stackaddrs.AbsComponent{
+		Stack: ret.Stack,
+		Item:  ret.Item.Component,
+	}
 }
 
 // mustPlanDynamicValue is a helper function that constructs a
@@ -279,4 +342,23 @@ func mustMarshalJSONAttrs(attrs map[string]interface{}) []byte {
 		panic(err)
 	}
 	return jsonAttrs
+}
+
+func providerFunctionHashArgs(provider addrs.Provider, name string, args ...cty.Value) []byte {
+	sum := sha256.New()
+
+	sum.Write([]byte(provider.String()))
+	sum.Write([]byte("|"))
+	sum.Write([]byte(name))
+	for _, arg := range args {
+		sum.Write([]byte("|"))
+		sum.Write([]byte(arg.GoString()))
+	}
+
+	return sum.Sum(nil)
+}
+
+func providerFunctionHashResult(value cty.Value) []byte {
+	bytes := sha256.Sum256([]byte(value.GoString()))
+	return bytes[:]
 }

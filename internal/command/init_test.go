@@ -2939,9 +2939,73 @@ Error: Failed to query available provider packages
 Could not retrieve the list of available versions for provider
 hashicorp/test: no available releases match the given constraints 1.0.1,
 1.0.2
+
+To see which modules are currently depending on hashicorp/test and what
+versions are specified, run the following command:
+    terraform providers
 `
 	if diff := cmp.Diff(got, want); len(diff) > 0 {
 		t.Fatalf("wrong error message: \ngot:\n%s\nwant:\n%s\ndiff:\n%s", got, want, diff)
+	}
+}
+
+func TestInit_testsWithOverriddenInvalidRequiredProviders(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("init-with-overrides-and-duplicates"), td)
+	defer testChdir(t, td)()
+
+	provider := applyFixtureProvider() // We just want the types from this provider.
+
+	providerSource, close := newMockProviderSource(t, map[string][]string{
+		"hashicorp/test": {"1.0.0"},
+	})
+	defer close()
+
+	ui := new(cli.MockUi)
+	view, done := testView(t)
+	c := &InitCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(provider),
+			Ui:               ui,
+			View:             view,
+			ProviderSource:   providerSource,
+		},
+	}
+
+	args := []string{}
+	code := c.Run(args) // just make sure it doesn't crash.
+	if code != 1 {
+		t.Fatalf("expected failure but got: \n%s", done(t).All())
+	}
+}
+
+func TestInit_testsWithInvalidRequiredProviders(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("init-with-duplicates"), td)
+	defer testChdir(t, td)()
+
+	provider := applyFixtureProvider() // We just want the types from this provider.
+
+	providerSource, close := newMockProviderSource(t, map[string][]string{
+		"hashicorp/test": {"1.0.0"},
+	})
+	defer close()
+
+	ui := new(cli.MockUi)
+	view, done := testView(t)
+	c := &InitCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(provider),
+			Ui:               ui,
+			View:             view,
+			ProviderSource:   providerSource,
+		},
+	}
+
+	args := []string{}
+	code := c.Run(args) // just make sure it doesn't crash.
+	if code != 1 {
+		t.Fatalf("expected failure but got: \n%s", done(t).All())
 	}
 }
 

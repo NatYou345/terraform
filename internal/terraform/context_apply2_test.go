@@ -2178,6 +2178,13 @@ variable "input" {
     }
 }
 
+# In order for the variable to be validated during destroy, it must be required
+# by the destroy plan. This is done by having the test provider require the
+# value in order to destroy the test_object instance.
+provider "test" {
+  test_string = var.input
+}
+
 resource "test_object" "a" {
 	test_string = var.input
 }
@@ -2743,6 +2750,11 @@ removed {
 		t.Fatalf("diags: %s", diags.Err())
 	}
 
+	// check that the provider was not asked to refresh the resource
+	if p.ReadResourceCalled {
+		t.Fatalf("Expected ReadResource not to be called, but it was called")
+	}
+
 	// check that the provider was not asked to destroy the resource
 	if p.ApplyResourceChangeCalled {
 		t.Fatalf("Expected ApplyResourceChange not to be called, but it was called")
@@ -2787,6 +2799,11 @@ removed {
 	state, diags = ctx.Apply(plan, m, nil)
 	if diags.HasErrors() {
 		t.Fatalf("diags: %s", diags.Err())
+	}
+
+	// check that the provider was not asked to refresh the resource
+	if p.ReadResourceCalled {
+		t.Fatalf("Expected ReadResource not to be called, but it was called")
 	}
 
 	// check that the provider was not asked to destroy the resource
@@ -3002,11 +3019,6 @@ func TestContext2Apply_applyingFlag(t *testing.T) {
 						source = "terraform.io/builtin/test"
 					}
 				}
-
-				# If this experimental feature becomes stablized and this test
-				# is still relevant, consider just removing this opt-in while
-				# retaining the rest.
-				experiments = [ephemeral_values]
 			}
 
 			provider "test" {
@@ -3085,13 +3097,6 @@ func TestContext2Apply_applyingFlag(t *testing.T) {
 func TestContext2Apply_applyTimeVariables(t *testing.T) {
 	m := testModuleInline(t, map[string]string{
 		"main.tf": `
-			# If this experimental feature becomes stablized and this test
-			# is still relevant, consider just removing this opt-in while
-			# retaining the rest.
-			terraform {
-				experiments = [ephemeral_values]
-			}
-
 			variable "e" {
 				type      = string
 				default   = null

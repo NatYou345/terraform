@@ -7,12 +7,14 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/hashicorp/terraform/internal/addrs"
 	"github.com/hashicorp/terraform/internal/instances"
+	"github.com/hashicorp/terraform/internal/lang"
 	"github.com/hashicorp/terraform/internal/promising"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
 	"github.com/hashicorp/terraform/internal/stacks/stackconfig"
@@ -344,6 +346,16 @@ func (s *StackConfig) ProviderLocalName(ctx context.Context, addr addrs.Provider
 	return s.config.Stack.RequiredProviders.LocalNameForProvider(addr)
 }
 
+// ProviderForLocalName returns the provider for the given local name in this
+// particular stack configuration, based on the declarations in the
+// required_providers configuration block.
+//
+// If the second return value is false then there is no provider declared
+// for the given local name, and so the first return value is invalid.
+func (s *StackConfig) ProviderForLocalName(ctx context.Context, localName string) (addrs.Provider, bool) {
+	return s.config.Stack.RequiredProviders.ProviderForLocalName(localName)
+}
+
 // StackCall returns a [StackCallConfig] representing the "stack" block
 // matching the given address declared within this stack config, or nil if
 // there is no such declaration.
@@ -483,7 +495,7 @@ func (s *StackConfig) resolveExpressionReference(
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,
 				Summary:  "Reference to undeclared embedded stack",
-				Detail:   fmt.Sprintf("There is no stack %q block declared this stack.", addr.Name),
+				Detail:   fmt.Sprintf("There is no stack %q block declared in this stack.", addr.Name),
 				Subject:  ref.SourceRange.ToHCL().Ptr(),
 			})
 			return nil, diags
@@ -495,7 +507,7 @@ func (s *StackConfig) resolveExpressionReference(
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,
 				Summary:  "Reference to undeclared provider configuration",
-				Detail:   fmt.Sprintf("There is no provider %q %q block declared this stack.", addr.ProviderLocalName, addr.Name),
+				Detail:   fmt.Sprintf("There is no provider %q %q block declared in this stack.", addr.ProviderLocalName, addr.Name),
 				Subject:  ref.SourceRange.ToHCL().Ptr(),
 			})
 			return nil, diags
@@ -564,6 +576,17 @@ func (s *StackConfig) resolveExpressionReference(
 		})
 		return nil, diags
 	}
+}
+
+// ExternalFunctions implements ExpressionScope.
+func (s *StackConfig) ExternalFunctions(ctx context.Context) (lang.ExternalFuncs, func(), tfdiags.Diagnostics) {
+	return s.main.ProviderFunctions(ctx, s)
+}
+
+// PlanTimestamp implements ExpressionScope, providing the timestamp at which
+// the current plan is being run.
+func (s *StackConfig) PlanTimestamp() time.Time {
+	return s.main.PlanTimestamp()
 }
 
 // reportNamedPromises implements namedPromiseReporter.

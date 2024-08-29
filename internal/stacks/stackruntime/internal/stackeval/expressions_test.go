@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/hcl/v2"
@@ -17,6 +18,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/hashicorp/terraform/internal/collections"
+	"github.com/hashicorp/terraform/internal/lang"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
 	"github.com/hashicorp/terraform/internal/tfdiags"
 )
@@ -347,6 +349,16 @@ func (s staticExpressionScope) ResolveExpressionReference(ctx context.Context, r
 		return nil, diags
 	}
 	return ret, diags
+}
+
+// ExternalFunctions implements ExpressionScope
+func (s staticExpressionScope) ExternalFunctions(ctx context.Context) (lang.ExternalFuncs, func(), tfdiags.Diagnostics) {
+	return lang.ExternalFuncs{}, func() {}, nil
+}
+
+// PlanTimestamp implements ExpressionScope
+func (s staticExpressionScope) PlanTimestamp() time.Time {
+	return time.Now().UTC()
 }
 
 // Add makes the given object available in the scope at the given address.

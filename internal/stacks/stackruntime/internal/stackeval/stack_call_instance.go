@@ -6,6 +6,7 @@ package stackeval
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform/internal/addrs"
 	"github.com/hashicorp/terraform/internal/collections"
 	"github.com/hashicorp/terraform/internal/instances"
+	"github.com/hashicorp/terraform/internal/lang"
 	"github.com/hashicorp/terraform/internal/lang/marks"
 	"github.com/hashicorp/terraform/internal/promising"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
@@ -222,6 +224,17 @@ func (c *StackCallInstance) CheckInputVariableValues(ctx context.Context, phase 
 func (c *StackCallInstance) ResolveExpressionReference(ctx context.Context, ref stackaddrs.Reference) (Referenceable, tfdiags.Diagnostics) {
 	stack := c.CallerStack(ctx)
 	return stack.resolveExpressionReference(ctx, ref, nil, c.repetition)
+}
+
+// ExternalFunctions implements ExpressionScope.
+func (c *StackCallInstance) ExternalFunctions(ctx context.Context) (lang.ExternalFuncs, func(), tfdiags.Diagnostics) {
+	return c.main.ProviderFunctions(ctx, c.main.StackConfig(ctx, c.call.Addr().Stack.ConfigAddr()))
+}
+
+// PlanTimestamp implements ExpressionScope, providing the timestamp at which
+// the current plan is being run.
+func (c *StackCallInstance) PlanTimestamp() time.Time {
+	return c.main.PlanTimestamp()
 }
 
 func (c *StackCallInstance) checkValid(ctx context.Context, phase EvalPhase) tfdiags.Diagnostics {

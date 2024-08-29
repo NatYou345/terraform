@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform/internal/addrs"
 	"github.com/hashicorp/terraform/internal/collections"
 	"github.com/hashicorp/terraform/internal/instances"
+	"github.com/hashicorp/terraform/internal/lang"
 	"github.com/hashicorp/terraform/internal/lang/marks"
 	"github.com/hashicorp/terraform/internal/plans"
 	"github.com/hashicorp/terraform/internal/promising"
@@ -440,6 +442,17 @@ func (s *Stack) ResolveExpressionReference(ctx context.Context, ref stackaddrs.R
 	return s.resolveExpressionReference(ctx, ref, nil, instances.RepetitionData{})
 }
 
+// ExternalFunctions implements ExpressionScope.
+func (s *Stack) ExternalFunctions(ctx context.Context) (lang.ExternalFuncs, func(), tfdiags.Diagnostics) {
+	return s.main.ProviderFunctions(ctx, s.StackConfig(ctx))
+}
+
+// PlanTimestamp implements ExpressionScope, providing the timestamp at which
+// the current plan is being run.
+func (s *Stack) PlanTimestamp() time.Time {
+	return s.main.PlanTimestamp()
+}
+
 // resolveExpressionReference is a shared implementation of [ExpressionScope]
 // used for this stack's scope and all of the nested scopes of declarations
 // in the same stack, since they tend to differ only in what "self" means
@@ -512,7 +525,7 @@ func (s *Stack) resolveExpressionReference(
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,
 				Summary:  "Reference to undeclared embedded stack",
-				Detail:   fmt.Sprintf("There is no stack %q block declared this stack.", addr.Name),
+				Detail:   fmt.Sprintf("There is no stack %q block declared in this stack.", addr.Name),
 				Subject:  ref.SourceRange.ToHCL().Ptr(),
 			})
 			return nil, diags
@@ -524,7 +537,7 @@ func (s *Stack) resolveExpressionReference(
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,
 				Summary:  "Reference to undeclared provider configuration",
-				Detail:   fmt.Sprintf("There is no provider %q %q block declared this stack.", addr.ProviderLocalName, addr.Name),
+				Detail:   fmt.Sprintf("There is no provider %q %q block declared in this stack.", addr.ProviderLocalName, addr.Name),
 				Subject:  ref.SourceRange.ToHCL().Ptr(),
 			})
 			return nil, diags

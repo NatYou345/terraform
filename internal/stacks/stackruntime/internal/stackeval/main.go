@@ -6,17 +6,22 @@ package stackeval
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/go-slug/sourcebundle"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/function"
 
 	"github.com/hashicorp/terraform/internal/addrs"
 	fileProvisioner "github.com/hashicorp/terraform/internal/builtin/provisioners/file"
 	remoteExecProvisioner "github.com/hashicorp/terraform/internal/builtin/provisioners/remote-exec"
+	"github.com/hashicorp/terraform/internal/depsfile"
+	"github.com/hashicorp/terraform/internal/lang"
 	"github.com/hashicorp/terraform/internal/promising"
+	"github.com/hashicorp/terraform/internal/providers"
 	"github.com/hashicorp/terraform/internal/provisioners"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
 	"github.com/hashicorp/terraform/internal/stacks/stackconfig"
@@ -74,11 +79,13 @@ type Main struct {
 
 	// The remaining fields memoize other objects we might create in response
 	// to method calls. Must lock "mu" before interacting with them.
-	mu              sync.Mutex
-	mainStackConfig *StackConfig
-	mainStack       *Stack
-	providerTypes   map[addrs.Provider]*ProviderType
-	cleanupFuncs    []func(context.Context) tfdiags.Diagnostics
+	mu                      sync.Mutex
+	mainStackConfig         *StackConfig
+	mainStack               *Stack
+	providerTypes           map[addrs.Provider]*ProviderType
+	providerFunctionResults *providers.FunctionResults
+	externalFuncs           lang.ExternalFuncs
+	cleanupFuncs            []func(context.Context) tfdiags.Diagnostics
 }
 
 var _ namedPromiseReporter = (*Main)(nil)
@@ -90,17 +97,12 @@ type mainValidating struct {
 type mainPlanning struct {
 	opts      PlanOpts
 	prevState *stackstate.State
-
-	// This is a utility for unit tests that want to encourage stable output
-	// to assert against. Not for real use.
-	forcePlanTimestamp *time.Time
 }
 
 type mainApplying struct {
-	opts          ApplyOpts
-	plan          *stackplan.Plan
-	rootInputVals map[stackaddrs.InputVariable]cty.Value
-	results       *ChangeExecResults
+	opts    ApplyOpts
+	plan    *stackplan.Plan
+	results *ChangeExecResults
 }
 
 type mainInspecting struct {
@@ -114,8 +116,9 @@ func NewForValidating(config *stackconfig.Config, opts ValidateOpts) *Main {
 		validating: &mainValidating{
 			opts: opts,
 		},
-		providerFactories: opts.ProviderFactories,
-		providerTypes:     make(map[addrs.Provider]*ProviderType),
+		providerFactories:       opts.ProviderFactories,
+		providerTypes:           make(map[addrs.Provider]*ProviderType),
+		providerFunctionResults: providers.NewFunctionResultsTable(nil),
 	}
 }
 
@@ -131,22 +134,23 @@ func NewForPlanning(config *stackconfig.Config, prevState *stackstate.State, opt
 			opts:      opts,
 			prevState: prevState,
 		},
-		providerFactories: opts.ProviderFactories,
-		providerTypes:     make(map[addrs.Provider]*ProviderType),
+		providerFactories:       opts.ProviderFactories,
+		providerTypes:           make(map[addrs.Provider]*ProviderType),
+		providerFunctionResults: providers.NewFunctionResultsTable(nil),
 	}
 }
 
-func NewForApplying(config *stackconfig.Config, rootInputs map[stackaddrs.InputVariable]cty.Value, plan *stackplan.Plan, execResults *ChangeExecResults, opts ApplyOpts) *Main {
+func NewForApplying(config *stackconfig.Config, plan *stackplan.Plan, execResults *ChangeExecResults, opts ApplyOpts) *Main {
 	return &Main{
 		config: config,
 		applying: &mainApplying{
-			opts:          opts,
-			plan:          plan,
-			rootInputVals: rootInputs,
-			results:       execResults,
+			opts:    opts,
+			plan:    plan,
+			results: execResults,
 		},
-		providerFactories: opts.ProviderFactories,
-		providerTypes:     make(map[addrs.Provider]*ProviderType),
+		providerFactories:       opts.ProviderFactories,
+		providerTypes:           make(map[addrs.Provider]*ProviderType),
+		providerFunctionResults: providers.NewFunctionResultsTable(plan.ProviderFunctionResults),
 	}
 }
 
@@ -157,9 +161,10 @@ func NewForInspecting(config *stackconfig.Config, state *stackstate.State, opts 
 			state: state,
 			opts:  opts,
 		},
-		providerFactories: opts.ProviderFactories,
-		providerTypes:     make(map[addrs.Provider]*ProviderType),
-		testOnlyGlobals:   opts.TestOnlyGlobals,
+		providerFactories:       opts.ProviderFactories,
+		providerTypes:           make(map[addrs.Provider]*ProviderType),
+		providerFunctionResults: providers.NewFunctionResultsTable(nil),
+		testOnlyGlobals:         opts.TestOnlyGlobals,
 	}
 }
 
@@ -366,6 +371,64 @@ func (m *Main) ProviderFactories() ProviderFactories {
 	return m.providerFactories
 }
 
+// ProviderFunctions returns the collection of externally defined provider
+// functions available to the current stack.
+func (m *Main) ProviderFunctions(ctx context.Context, config *StackConfig) (lang.ExternalFuncs, func(), tfdiags.Diagnostics) {
+	var diags tfdiags.Diagnostics
+
+	fns := make(map[string]map[string]function.Function, len(m.providerFactories))
+
+	var clients []providers.Interface
+	for addr := range m.providerFactories {
+		provider := m.ProviderType(ctx, addr)
+		client, err := provider.UnconfiguredClient(ctx)
+		if err != nil {
+			// We should have started these providers before we got here, so
+			// this error shouldn't ever occur.
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Failed to create provider client",
+				Detail:   fmt.Sprintf("Failed to create client for provider %s while gathering provider functions: %s. This is a bug in Terraform, please report it!", addr, err),
+			})
+			continue // just skip this provider and keep going
+		}
+
+		// keep track of the client as we need to close it later
+		clients = append(clients, client)
+
+		local, ok := config.ProviderLocalName(ctx, addr)
+		if !ok {
+			log.Printf("[ERROR] Provider %s is not in the required providers block", addr)
+			// This also shouldn't happen, as every provider should be
+			// in the required providers block and that should have been
+			// validated - but we can recover from this by just using the
+			// default local name.
+			local = addr.Type
+		}
+
+		// Now, we can initialise the functions.
+		schema := client.GetProviderSchema()
+		fns[local] = make(map[string]function.Function, len(schema.Functions))
+		for name, fn := range schema.Functions {
+			fns[local][name] = fn.BuildFunction(addr, name, m.providerFunctionResults, func() (providers.Interface, error) {
+				return client, nil
+			})
+		}
+	}
+
+	return lang.ExternalFuncs{Provider: fns}, func() {
+		// Tidy up after the functions aren't being used any more.
+		for _, client := range clients {
+			// This shouldn't actually stop and start the underlying provider
+			// plugin. The UnconfiguredClient method actually borrows and shares
+			// the client that was already started by the provider type, so
+			// stopping it here should just release that borrowed client.
+			client.Stop()
+		}
+	}, diags
+
+}
+
 // ProviderType returns the [ProviderType] object representing the given
 // provider source address.
 //
@@ -433,22 +496,28 @@ func (m *Main) RootVariableValue(ctx context.Context, addr stackaddrs.InputVaria
 		if !m.Applying() {
 			panic("using ApplyPhase input variable values when not configured for applying")
 		}
-		ret, ok := m.applying.rootInputVals[addr]
-		if !ok {
-			// We should not get here if the given plan was created from the
-			// given configuration, since we should always record a value
-			// for every declared root input variable in the plan.
+
+		// First, check the values given to use directly by the caller.
+		if ret, ok := m.applying.opts.InputVariableValues[addr]; ok {
+			return ret
+		}
+
+		// If the caller didn't provide a value, we need to look up the value
+		// that was used during planning.
+
+		if ret, ok := m.applying.plan.RootInputValues[addr]; ok {
 			return ExternalInputValue{
-				Value: cty.DynamicVal,
+				Value: ret,
 			}
 		}
-		return ExternalInputValue{
-			Value: ret,
 
-			// We don't save source location information for variable
-			// definitions in the plan, but that's okay because if we were
-			// going to report any errors for these values then we should've
-			// already done it during the plan phase, and so couldn't get here..
+		// If we had nothing set, we'll return a null value. This means the
+		// default value will be applied, if any, or an error will be raised
+		// if no default is available. This should only be possible for an
+		// ephemeral value in which the caller didn't provide a value during
+		// the apply operation.
+		return ExternalInputValue{
+			Value: cty.NullVal(cty.DynamicPseudoType),
 		}
 
 	case InspectPhase:
@@ -595,5 +664,36 @@ func (m *Main) availableProvisioners() map[string]provisioners.Factory {
 			// another.
 			return nil, fmt.Errorf("local-exec provisioners are not supported in stack components; use provider functionality or remote provisioners instead")
 		},
+	}
+}
+
+// PlanTimestamp provides the timestamp at which the plan
+// associated with this operation is being executed.
+// If we are planning we either take the forced timestamp or the saved current time
+// If we are applying we take the timestamp time from the plan
+func (m *Main) PlanTimestamp() time.Time {
+	if m.applying != nil {
+		return m.applying.plan.PlanTimestamp
+	}
+	if m.planning != nil {
+		return m.planning.opts.PlanTimestamp
+	}
+
+	// This is the default case, we are not planning / applying
+	return time.Now().UTC()
+}
+
+// DependencyLocks returns the dependency locks for the given phase.
+func (m *Main) DependencyLocks(phase EvalPhase) *depsfile.Locks {
+	switch phase {
+	case ValidatePhase:
+		return &m.validating.opts.DependencyLocks
+	case PlanPhase:
+		return &m.PlanningOpts().DependencyLocks
+	case ApplyPhase:
+		return &m.applying.opts.DependencyLocks
+	default:
+		return nil
+
 	}
 }

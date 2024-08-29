@@ -4,11 +4,14 @@
 package stackplan
 
 import (
+	"time"
+
 	"github.com/zclconf/go-cty/cty"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/hashicorp/terraform/internal/addrs"
 	"github.com/hashicorp/terraform/internal/collections"
+	"github.com/hashicorp/terraform/internal/providers"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
 )
 
@@ -50,6 +53,14 @@ type Plan struct {
 	// instances defined in the overall stack configuration, including any
 	// nested component instances from embedded stacks.
 	Components collections.Map[stackaddrs.AbsComponentInstance, *Component]
+
+	// ProviderFunctionResults is a shared table of results from calling
+	// provider functions. This is stored and loaded from during the planning
+	// stage to use during apply operations.
+	ProviderFunctionResults []providers.FunctionHash
+
+	// PlanTimestamp is the time at which the plan was created.
+	PlanTimestamp time.Time
 }
 
 // RequiredProviderInstances returns a description of all of the provider

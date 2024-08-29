@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/google/go-cmp/cmp"
@@ -128,6 +129,7 @@ func TestApply_componentOrdering(t *testing.T) {
 					}, nil
 				},
 			},
+			PlanTimestamp: time.Now().UTC(),
 		})
 
 		outp, outpTester := testPlanOutput(t)
@@ -195,7 +197,7 @@ func TestApply_componentOrdering(t *testing.T) {
 
 		outp, outpTester := testApplyOutput(t, nil)
 
-		main, err := ApplyPlan(ctx, cfg, rawPlan, ApplyOpts{
+		main, err := ApplyPlan(ctx, cfg, plan, ApplyOpts{
 			ProviderFactories: ProviderFactories{
 				testProviderAddr: func() (providers.Interface, error) {
 					return &testing_provider.MockProvider{
@@ -287,6 +289,7 @@ func TestApply_componentOrdering(t *testing.T) {
 					}, nil
 				},
 			},
+			PlanTimestamp: time.Now().UTC(),
 		})
 
 		outp, outpTester := testPlanOutput(t)
@@ -322,7 +325,7 @@ func TestApply_componentOrdering(t *testing.T) {
 
 		outp, outpTester := testApplyOutput(t, nil)
 
-		main, err := ApplyPlan(ctx, cfg, rawPlan, ApplyOpts{
+		main, err := ApplyPlan(ctx, cfg, plan, ApplyOpts{
 			ProviderFactories: ProviderFactories{
 				testProviderAddr: func() (providers.Interface, error) {
 					return &testing_provider.MockProvider{

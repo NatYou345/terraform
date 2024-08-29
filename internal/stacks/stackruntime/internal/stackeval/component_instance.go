@@ -6,6 +6,7 @@ package stackeval
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform/internal/collections"
 	"github.com/hashicorp/terraform/internal/configs/configschema"
 	"github.com/hashicorp/terraform/internal/instances"
+	"github.com/hashicorp/terraform/internal/lang"
 	"github.com/hashicorp/terraform/internal/lang/marks"
 	"github.com/hashicorp/terraform/internal/plans"
 	"github.com/hashicorp/terraform/internal/promising"
@@ -89,12 +91,32 @@ func (c *ComponentInstance) CheckInputVariableValues(ctx context.Context, phase 
 
 	// We actually checked the errors statically already, so we only care about
 	// the value here.
-	return EvalComponentInputVariables(ctx, varDecls, wantTy, defs, decl, phase, c)
+	val, diags := EvalComponentInputVariables(ctx, varDecls, wantTy, defs, decl, phase, c)
+	if phase == ApplyPhase {
+		if !val.IsWhollyKnown() {
+			// We can't apply a configuration that has unknown values in it.
+			// This means an error has occured somewhere else, while gathering
+			// the input variables. We return a nil value here, whatever caused
+			// the error should have raised an error diagnostic separately.
+			return cty.NilVal, diags
+		}
+
+		// Note, that unknown values during the planning phase are totally fine.
+	}
+
+	return val, diags
 }
 
 // inputValuesForModulesRuntime adapts the result of
 // [ComponentInstance.InputVariableValues] to the representation that the
 // main Terraform modules runtime expects.
+//
+// The second argument (expectedValues) is the value that the apply operation
+// expects to see for the input variables, which is typically the input
+// values from the plan.
+//
+// During the planning phase, the expectedValues should be nil, as they will
+// only be checked during the apply phase.
 func (c *ComponentInstance) inputValuesForModulesRuntime(ctx context.Context, phase EvalPhase) terraform.InputValues {
 	valsObj := c.InputVariableValues(ctx, phase)
 	if valsObj == cty.NilVal {
@@ -172,7 +194,7 @@ func (c *ComponentInstance) CheckProviders(ctx context.Context, phase EvalPhase)
 
 		// componentAddr is the addrs.LocalProviderConfig that specifies the
 		// local name and (optional) alias of the provider in the component.
-		componentAddr := elem.Value
+		componentAddr := elem.Value.Local
 
 		// We validated the config providers during the static analysis, so we
 		// know this expression exists and resolves to the correct type.
@@ -369,7 +391,7 @@ func (c *ComponentInstance) checkProvider(ctx context.Context, sourceAddr addrs.
 	return stackconfigtypes.ProviderInstanceForValue(v), false, diags
 }
 
-func (c *ComponentInstance) neededProviderSchemas(ctx context.Context) (map[addrs.Provider]providers.ProviderSchema, tfdiags.Diagnostics) {
+func (c *ComponentInstance) neededProviderSchemas(ctx context.Context, phase EvalPhase) (map[addrs.Provider]providers.ProviderSchema, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	decl := c.call.Declaration(ctx)
@@ -389,6 +411,17 @@ func (c *ComponentInstance) neededProviderSchemas(ctx context.Context) (map[addr
 			continue // not our job to report a missing provider type
 		}
 		schema, err := pTy.Schema(ctx)
+
+		// If this phase has a dependency lockfile, check if the provider is in it.
+		depLocks := c.main.DependencyLocks(phase)
+		if depLocks != nil {
+			providerLockfileDiags := CheckProviderInLockfile(*depLocks, pTy, decl.DeclRange)
+			// We report these diagnostics in a different place
+			if providerLockfileDiags.HasErrors() {
+				continue
+			}
+		}
+
 		if err != nil {
 			// FIXME: it's not technically our job to report a schema
 			// fetch failure, but currently there is no single other
@@ -497,10 +530,42 @@ func (c *ComponentInstance) CheckModuleTreePlan(ctx context.Context) (*plans.Pla
 			}
 			prevState := c.PlanPrevState(ctx)
 
-			providerSchemas, moreDiags := c.neededProviderSchemas(ctx)
+			providerSchemas, moreDiags := c.neededProviderSchemas(ctx, PlanPhase)
 			diags = diags.Append(moreDiags)
 			if moreDiags.HasErrors() {
 				return nil, diags
+			}
+
+			// We're actually going to provide two sets of providers to Core
+			// for Stacks operations.
+			//
+			// First, we provide the basic set of factories here. These are used
+			// by Terraform Core to handle operations that require an
+			// unconfigured provider, such as cross-provider move operations and
+			// provider functions. The provider factories return the shared
+			// unconfigured client that stacks holds for the same reasons. The
+			// factories will lazily request the unconfigured clients here as
+			// they are requested by Terraform.
+			//
+			// Second, we provide provider clients that are already configured
+			// for any operations that require configured clients. This is
+			// because we want to provide the clients built using the provider
+			// configurations from the stack that exist outside of Terraform's
+			// concerns. These are provided below in the `providerClients`
+			// variable.
+
+			providerFactories := make(map[addrs.Provider]providers.Factory, len(providerSchemas))
+			for addr := range providerSchemas {
+				providerFactories[addr] = func() (providers.Interface, error) {
+					// Lazily fetch the unconfigured client for the provider
+					// as and when we need it.
+					provider, err := c.main.ProviderType(ctx, addr).UnconfiguredClient(ctx)
+					if err != nil {
+						return nil, err
+					}
+					// this provider should only be used for selected operations
+					return stubs.OfflineProvider(provider), nil
+				}
 			}
 
 			tfCtx, err := terraform.NewContext(&terraform.ContextOpts{
@@ -512,6 +577,7 @@ func (c *ComponentInstance) CheckModuleTreePlan(ctx context.Context) (*plans.Pla
 						addr:  c.Addr(),
 					},
 				},
+				Providers:                providerFactories,
 				PreloadedProviderSchemas: providerSchemas,
 				Provisioners:             c.main.availableProvisioners(),
 			})
@@ -528,13 +594,7 @@ func (c *ComponentInstance) CheckModuleTreePlan(ctx context.Context) (*plans.Pla
 
 			stackPlanOpts := c.main.PlanningOpts()
 			inputValues := c.inputValuesForModulesRuntime(ctx, PlanPhase)
-			if inputValues == nil {
-				// inputValuesForModulesRuntime uses nil (as opposed to a
-				// non-nil zerolen map) to represent that the definition of
-				// the input variables was so invalid that we cannot do
-				// anything with it, in which case we'll just return early
-				// and assume the plan walk driver will find the diagnostics
-				// via another return path.
+			if inputValues == nil || diags.HasErrors() {
 				return nil, diags
 			}
 
@@ -597,6 +657,7 @@ func (c *ComponentInstance) CheckModuleTreePlan(ctx context.Context) (*plans.Pla
 				}
 			}()
 
+			plantimestamp := c.main.PlanTimestamp()
 			// NOTE: This ComponentInstance type only deals with component
 			// instances currently declared in the configuration. See
 			// [ComponentInstanceRemoved] for the model of a component instance
@@ -609,9 +670,8 @@ func (c *ComponentInstance) CheckModuleTreePlan(ctx context.Context) (*plans.Pla
 				DeferralAllowed:            true,
 				ExternalDependencyDeferred: deferred,
 
-				// This is set by some tests but should not be used in main code.
-				// (nil means to use the real time when tfCtx.Plan was called.)
-				ForcePlanTimestamp: stackPlanOpts.ForcePlanTimestamp,
+				// We want the same plantimestamp between all components and the stacks language
+				ForcePlanTimestamp: &plantimestamp,
 			})
 			diags = diags.Append(moreDiags)
 
@@ -665,7 +725,13 @@ func (c *ComponentInstance) CheckModuleTreePlan(ctx context.Context) (*plans.Pla
 			if diags.HasErrors() {
 				hookMore(ctx, seq, h.ErrorComponentInstancePlan, addr)
 			} else {
-				hookMore(ctx, seq, h.EndComponentInstancePlan, addr)
+				if plan.Complete {
+					hookMore(ctx, seq, h.EndComponentInstancePlan, addr)
+
+				} else {
+					hookMore(ctx, seq, h.DeferComponentInstancePlan, addr)
+				}
+
 			}
 
 			return plan, diags
@@ -710,12 +776,15 @@ func (c *ComponentInstance) ApplyModuleTreePlan(ctx context.Context, plan *plans
 	// changed at all.
 	noOpResult := c.PlaceholderApplyResultForSkippedApply(ctx, plan)
 
+	// stackPlan is the stack representation of this component's plan.
+	stackPlan := c.main.PlanBeingApplied().Components.Get(c.Addr())
+
 	// We'll gather up our set of potentially-affected objects before we do
 	// anything else, because the modules runtime tends to mutate the objects
 	// accessible through the given plan pointer while it does its work and
 	// so we're likely to get a different/incomplete answer if we ask after
 	// work has already been done.
-	affectedResourceInstanceObjects := resourceInstanceObjectsAffectedByPlan(plan)
+	affectedResourceInstanceObjects := resourceInstanceObjectsAffectedByStackPlan(stackPlan)
 
 	h := hooksFromContext(ctx)
 	hookSingle(ctx, hooksFromContext(ctx).PendingComponentInstanceApply, c.Addr())
@@ -742,10 +811,24 @@ func (c *ComponentInstance) ApplyModuleTreePlan(ctx context.Context, plan *plans
 		return noOpResult, diags
 	}
 
-	providerSchemas, moreDiags := c.neededProviderSchemas(ctx)
+	providerSchemas, moreDiags := c.neededProviderSchemas(ctx, ApplyPhase)
 	diags = diags.Append(moreDiags)
 	if moreDiags.HasErrors() {
 		return noOpResult, diags
+	}
+
+	providerFactories := make(map[addrs.Provider]providers.Factory, len(providerSchemas))
+	for addr := range providerSchemas {
+		providerFactories[addr] = func() (providers.Interface, error) {
+			// Lazily fetch the unconfigured client for the provider
+			// as and when we need it.
+			provider, err := c.main.ProviderType(ctx, addr).UnconfiguredClient(ctx)
+			if err != nil {
+				return nil, err
+			}
+			// this provider should only be used for selected operations
+			return stubs.OfflineProvider(provider), nil
+		}
 	}
 
 	tfHook := &componentInstanceTerraformHook{
@@ -758,6 +841,7 @@ func (c *ComponentInstance) ApplyModuleTreePlan(ctx context.Context, plan *plans
 		Hooks: []terraform.Hook{
 			tfHook,
 		},
+		Providers:                providerFactories,
 		PreloadedProviderSchemas: providerSchemas,
 		Provisioners:             c.main.availableProvisioners(),
 	})
@@ -789,9 +873,6 @@ func (c *ComponentInstance) ApplyModuleTreePlan(ctx context.Context, plan *plans
 		// via another return path.
 		return noOpResult, diags
 	}
-	// TODO: Check that the final input values are consistent with what
-	// we had during planning. If not, that suggests a bug elsewhere.
-	//
 	// UGH: the "modules runtime"'s model of planning was designed around
 	// the goal of producing a traditional Terraform CLI-style saved plan
 	// file and so it has the input variable values already encoded as
@@ -872,7 +953,15 @@ func (c *ComponentInstance) ApplyModuleTreePlan(ctx context.Context, plan *plans
 			// We'll increment these gradually as we visit each change below.
 			Add:    0,
 			Change: 0,
+			Import: 0,
 			Remove: 0,
+			Move:   0,
+			Forget: 0,
+
+			// The defer changes amount is a bit funny - we just copy over the
+			// count of deferred changes from the plan, but we're not actually
+			// making changes for this so the "true" count is zero.
+			Defer: stackPlan.DeferredResourceInstanceChanges.Len(),
 		}
 
 		// We need to report what changes were applied, which is mostly just
@@ -882,12 +971,45 @@ func (c *ComponentInstance) ApplyModuleTreePlan(ctx context.Context, plan *plans
 		applied := tfHook.ResourceInstanceObjectsSuccessfullyApplied()
 		for _, rioAddr := range applied {
 			action := tfHook.ResourceInstanceObjectAppliedAction(rioAddr)
-
-			// FIXME: We can't count imports here because they aren't "actions"
-			// in the sense that our hook gets informed about, and so the
-			// import number will always be zero in the apply phase.
-
 			cic.CountNewAction(action)
+		}
+
+		// The state management actions (move, import, forget) don't emit
+		// actions during an apply so they're not being counted by looking
+		// at the ResourceInstanceObjectAppliedAction above.
+		//
+		// Instead, we'll recheck the planned actions here to count them.
+		for _, rioAddr := range affectedResourceInstanceObjects {
+			if applied.Has(rioAddr) {
+				// Then we processed this above.
+				continue
+			}
+
+			change, exists := stackPlan.ResourceInstancePlanned.GetOk(rioAddr)
+			if !exists {
+				// This is a bit weird, but not something we should prevent
+				// the apply from continuing for. We'll just ignore it and
+				// assume that the plan was incomplete in some way.
+				continue
+			}
+
+			// Otherwise, we have a change that wasn't successfully applied
+			// for some reason. If the change was a no-op and a move or import
+			// then it was still successful so we'll count it as such. Also,
+			// forget actions don't count as applied changes but still happened
+			// so we'll count them here.
+
+			switch change.Action {
+			case plans.NoOp:
+				if change.Importing != nil {
+					cic.Import++
+				}
+				if change.Moved() {
+					cic.Move++
+				}
+			case plans.Forget:
+				cic.Forget++
+			}
 		}
 
 		hookMore(ctx, seq, h.ReportComponentInstanceApplied, cic)
@@ -955,7 +1077,7 @@ func (c *ComponentInstance) CheckApplyResult(ctx context.Context) (*ComponentIns
 		diags = diags.Append(tfdiags.Sourceless(
 			tfdiags.Error,
 			"Component instance apply not scheduled",
-			fmt.Sprintf("Terraform needs the result from applying changes to %s, but that apply was apparently not scheduled to run. This is a bug in Terraform.", c.Addr()),
+			fmt.Sprintf("Terraform needs the result from applying changes to %s, but that apply was apparently not scheduled to run: %s. This is a bug in Terraform.", c.Addr(), err),
 		))
 	}
 	return applyResult, diags
@@ -1185,6 +1307,23 @@ func (c *ComponentInstance) ResultValue(ctx context.Context, phase EvalPhase) ct
 			// Otherwise, just set the value as is.
 			attrs[name] = ov.Value
 		}
+
+		// If the apply operation was unsuccessful for any reason then we
+		// might have some output values that are missing from the state,
+		// because the state is only updated with the results of successful
+		// operations. To avoid downstream errors we'll insert unknown values
+		// for any declared output values that don't yet have a final value.
+		//
+		// The status of the apply operation will have been recorded elsewhere
+		// so we don't need to worry about that here. This also ensures that
+		// nothing will actually attempt to apply the unknown values here.
+		config := c.call.Config(ctx).ModuleTree(ctx)
+		for _, output := range config.Module.Outputs {
+			if _, ok := attrs[output.Name]; !ok {
+				attrs[output.Name] = cty.DynamicVal
+			}
+		}
+
 		return cty.ObjectVal(attrs)
 
 	default:
@@ -1197,6 +1336,17 @@ func (c *ComponentInstance) ResultValue(ctx context.Context, phase EvalPhase) ct
 func (c *ComponentInstance) ResolveExpressionReference(ctx context.Context, ref stackaddrs.Reference) (Referenceable, tfdiags.Diagnostics) {
 	stack := c.call.Stack(ctx)
 	return stack.resolveExpressionReference(ctx, ref, nil, c.repetition)
+}
+
+// ExternalFunctions implements ExpressionScope.
+func (c *ComponentInstance) ExternalFunctions(ctx context.Context) (lang.ExternalFuncs, func(), tfdiags.Diagnostics) {
+	return c.main.ProviderFunctions(ctx, c.call.Config(ctx).StackConfig(ctx))
+}
+
+// PlanTimestamp implements ExpressionScope, providing the timestamp at which
+// the current plan is being run.
+func (c *ComponentInstance) PlanTimestamp() time.Time {
+	return c.main.PlanTimestamp()
 }
 
 // PlanChanges implements Plannable by validating that all of the per-instance
@@ -1251,14 +1401,16 @@ func (c *ComponentInstance) PlanChanges(ctx context.Context) ([]stackplan.Planne
 		changes = append(changes, &stackplan.PlannedChangeComponentInstance{
 			Addr: c.Addr(),
 
-			Action:                 action,
-			PlanApplyable:          corePlan.Applyable,
-			PlanComplete:           corePlan.Complete,
-			RequiredComponents:     c.RequiredComponents(ctx),
-			PlannedInputValues:     corePlan.VariableValues,
-			PlannedInputValueMarks: corePlan.VariableMarks,
-			PlannedOutputValues:    outputVals,
-			PlannedCheckResults:    corePlan.Checks,
+			Action:                         action,
+			Mode:                           corePlan.UIMode,
+			PlanApplyable:                  corePlan.Applyable,
+			PlanComplete:                   corePlan.Complete,
+			RequiredComponents:             c.RequiredComponents(ctx),
+			PlannedInputValues:             corePlan.VariableValues,
+			PlannedInputValueMarks:         corePlan.VariableMarks,
+			PlannedOutputValues:            outputVals,
+			PlannedCheckResults:            corePlan.Checks,
+			PlannedProviderFunctionResults: corePlan.ProviderFunctionResults,
 
 			// We must remember the plan timestamp so that the plantimestamp
 			// function can return a consistent result during a later apply phase.
@@ -1550,16 +1702,33 @@ func (c *ComponentInstance) CheckApply(ctx context.Context) ([]stackstate.Applie
 				}
 			}
 
+			var previousAddress *stackaddrs.AbsResourceInstanceObject
+			if plannedChange := c.main.PlanBeingApplied().Components.Get(c.Addr()).ResourceInstancePlanned.Get(rioAddr); plannedChange != nil && plannedChange.Moved() {
+				// If we moved the resource instance object, we need to record
+				// the previous address in the applied change. The planned
+				// change might be nil if the resource instance object was
+				// deleted.
+				previousAddress = &stackaddrs.AbsResourceInstanceObject{
+					Component: c.Addr(),
+					Item: addrs.AbsResourceInstanceObject{
+						ResourceInstance: plannedChange.PrevRunAddr,
+						DeposedKey:       addrs.NotDeposed,
+					},
+				}
+			}
+
 			changes = append(changes, &stackstate.AppliedChangeResourceInstanceObject{
 				ResourceInstanceObjectAddr: stackaddrs.AbsResourceInstanceObject{
 					Component: c.Addr(),
 					Item:      rioAddr,
 				},
-				NewStateSrc:        os,
-				ProviderConfigAddr: providerConfigAddr,
-				Schema:             schema,
+				PreviousResourceInstanceObjectAddr: previousAddress,
+				NewStateSrc:                        os,
+				ProviderConfigAddr:                 providerConfigAddr,
+				Schema:                             schema,
 			})
 		}
+
 	}
 
 	return changes, diags

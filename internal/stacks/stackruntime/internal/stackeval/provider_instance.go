@@ -6,6 +6,7 @@ package stackeval
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hcldec"
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform/internal/addrs"
 	"github.com/hashicorp/terraform/internal/collections"
 	"github.com/hashicorp/terraform/internal/instances"
+	"github.com/hashicorp/terraform/internal/lang"
 	"github.com/hashicorp/terraform/internal/promising"
 	"github.com/hashicorp/terraform/internal/providers"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
@@ -40,6 +42,8 @@ type ProviderInstance struct {
 	providerArgs perEvalPhase[promising.Once[withDiagnostics[cty.Value]]]
 	client       perEvalPhase[promising.Once[withDiagnostics[providers.Interface]]]
 }
+
+var _ ExpressionScope = (*ProviderInstance)(nil)
 
 func newProviderInstance(provider *Provider, key addrs.InstanceKey, repetition instances.RepetitionData) *ProviderInstance {
 	return &ProviderInstance{
@@ -193,7 +197,7 @@ func (p *ProviderInstance) CheckClient(ctx context.Context, phase EvalPhase) (pr
 					),
 					Subject: decl.DeclRange.ToHCL().Ptr(),
 				})
-				return &stubs.ErroredProvider{}, diags
+				return stubs.ErroredProvider(), diags
 			}
 
 			// If the context we recieved gets cancelled then we want providers
@@ -261,7 +265,7 @@ func (p *ProviderInstance) CheckClient(ctx context.Context, phase EvalPhase) (pr
 				// stub instead. (The real provider stays running until it
 				// gets cleaned up by the cleanup function above, despite being
 				// inaccessible to the caller.)
-				return &stubs.ErroredProvider{}, diags
+				return stubs.ErroredProvider(), diags
 			}
 
 			return providerClose{
@@ -282,6 +286,17 @@ func (p *ProviderInstance) CheckClient(ctx context.Context, phase EvalPhase) (pr
 func (p *ProviderInstance) ResolveExpressionReference(ctx context.Context, ref stackaddrs.Reference) (Referenceable, tfdiags.Diagnostics) {
 	stack := p.provider.Stack(ctx)
 	return stack.resolveExpressionReference(ctx, ref, nil, p.repetition)
+}
+
+// ExternalFunctions implements ExpressionScope.
+func (p *ProviderInstance) ExternalFunctions(ctx context.Context) (lang.ExternalFuncs, func(), tfdiags.Diagnostics) {
+	return p.main.ProviderFunctions(ctx, p.main.StackConfig(ctx, p.Addr().Stack.ConfigAddr()))
+}
+
+// PlanTimestamp implements ExpressionScope, providing the timestamp at which
+// the current plan is being run.
+func (p *ProviderInstance) PlanTimestamp() time.Time {
+	return p.main.PlanTimestamp()
 }
 
 func (p *ProviderInstance) checkValid(ctx context.Context, phase EvalPhase) tfdiags.Diagnostics {

@@ -19,10 +19,6 @@ import (
 func evaluateImportIdExpression(expr hcl.Expression, ctx EvalContext, keyData instances.RepetitionData, allowUnknown bool) (cty.Value, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
-	// import blocks only exist in the root module, and must be evaluated in
-	// that context.
-	ctx = evalContextForModuleInstance(ctx, addrs.RootModuleInstance)
-
 	if expr == nil {
 		return cty.NilVal, diags.Append(&hcl.Diagnostic{
 			Severity: hcl.DiagError,
@@ -32,6 +28,9 @@ func evaluateImportIdExpression(expr hcl.Expression, ctx EvalContext, keyData in
 		})
 	}
 
+	// import blocks only exist in the root module, and must be evaluated in
+	// that context.
+	ctx = evalContextForModuleInstance(ctx, addrs.RootModuleInstance)
 	scope := ctx.EvaluationScope(nil, nil, keyData)
 	importIdVal, evalDiags := scope.EvalExpr(expr, cty.String)
 	diags = diags.Append(evalDiags)

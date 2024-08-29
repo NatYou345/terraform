@@ -171,16 +171,7 @@ func (n *NodeAbstractResourceInstance) readDiff(ctx EvalContext, providerSchema 
 		return nil, fmt.Errorf("provider does not support resource type %q", addr.Resource.Resource.Type)
 	}
 
-	csrc := changes.GetResourceInstanceChange(addr, addrs.NotDeposed)
-	if csrc == nil {
-		log.Printf("[TRACE] readDiff: No planned change recorded for %s", n.Addr)
-		return nil, nil
-	}
-
-	change, err := csrc.Decode(schema.ImpliedType())
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode planned changes for %s: %s", n.Addr, err)
-	}
+	change := changes.GetResourceInstanceChange(addr, addrs.NotDeposed)
 
 	log.Printf("[TRACE] readDiff: Read %s change from plan for %s", change.Action, n.Addr)
 
@@ -556,11 +547,6 @@ func (n *NodeAbstractResourceInstance) writeChange(ctx EvalContext, change *plan
 		return nil
 	}
 
-	_, providerSchema, err := getProvider(ctx, n.ResolvedProvider)
-	if err != nil {
-		return err
-	}
-
 	if change.Addr.String() != n.Addr.String() || change.DeposedKey != deposedKey {
 		// Should never happen, and indicates a bug in the caller.
 		panic("inconsistent address and/or deposed key in writeChange")
@@ -576,19 +562,7 @@ func (n *NodeAbstractResourceInstance) writeChange(ctx EvalContext, change *plan
 		panic("unpopulated ResourceInstanceChange.PrevRunAddr in writeChange")
 	}
 
-	ri := n.Addr.Resource
-	schema, _ := providerSchema.SchemaForResourceAddr(ri.Resource)
-	if schema == nil {
-		// Should be caught during validation, so we don't bother with a pretty error here
-		return fmt.Errorf("provider does not support resource type %q", ri.Resource.Type)
-	}
-
-	csrc, err := change.Encode(schema.ImpliedType())
-	if err != nil {
-		return fmt.Errorf("failed to encode planned changes for %s: %s", n.Addr, err)
-	}
-
-	changes.AppendResourceInstanceChange(csrc)
+	changes.AppendResourceInstanceChange(change)
 	if deposedKey == states.NotDeposed {
 		log.Printf("[TRACE] writeChange: recorded %s change for %s", change.Action, n.Addr)
 	} else {
@@ -1684,11 +1658,22 @@ func (n *NodeAbstractResourceInstance) providerMetas(ctx EvalContext) (cty.Value
 //     (Note that every data source that is DeferredPrereq should also fit this description.)
 //   - We attempted a read request, but the provider says we're deferred.
 //   - It's nested in a check block, and should always read again during apply.
-func (n *NodeAbstractResourceInstance) planDataSource(ctx EvalContext, checkRuleSeverity tfdiags.Severity, skipPlanChanges bool) (*plans.ResourceInstanceChange, *states.ResourceInstanceObject, *providers.Deferred, instances.RepetitionData, tfdiags.Diagnostics) {
+func (n *NodeAbstractResourceInstance) planDataSource(ctx EvalContext, checkRuleSeverity tfdiags.Severity, skipPlanChanges, dependencyDeferred bool) (*plans.ResourceInstanceChange, *states.ResourceInstanceObject, *providers.Deferred, instances.RepetitionData, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 	var keyData instances.RepetitionData
 	var configVal cty.Value
+
 	var deferred *providers.Deferred
+	if dependencyDeferred {
+		// If a dependency of this data source was deferred, then we're going
+		// to end up deferring this whatever happens. So, our default status
+		// is deferred. If the provider indicates this resource should be
+		// deferred for another reason, that reason should take priority over
+		// this one.
+		deferred = &providers.Deferred{
+			Reason: providers.DeferredReasonDeferredPrereq,
+		}
+	}
 
 	_, providerSchema, err := getProvider(ctx, n.ResolvedProvider)
 	if err != nil {
@@ -1830,6 +1815,9 @@ func (n *NodeAbstractResourceInstance) planDataSource(ctx EvalContext, checkRule
 	newVal, readDeferred, readDiags := n.readDataSource(ctx, configVal)
 
 	if readDeferred != nil {
+		// This will either be null or a value that indicates we're deferred
+		// because of a dependency. In both cases we're happy to just overwrite
+		// that with the more relevant information directly from the provider.
 		deferred = readDeferred
 	}
 

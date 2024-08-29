@@ -8,6 +8,7 @@ import (
 
 	"github.com/hashicorp/go-uuid"
 	"github.com/zclconf/go-cty/cty"
+	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/hashicorp/terraform/internal/configs/configschema"
 	"github.com/hashicorp/terraform/internal/providers"
@@ -28,6 +29,15 @@ var (
 			"id":       {Type: cty.String, Optional: true, Computed: true},
 			"value":    {Type: cty.String, Optional: true},
 			"deferred": {Type: cty.Bool, Required: true},
+		},
+	}
+
+	FailedResourceSchema = &configschema.Block{
+		Attributes: map[string]*configschema.Attribute{
+			"id":         {Type: cty.String, Optional: true, Computed: true},
+			"value":      {Type: cty.String, Optional: true},
+			"fail_plan":  {Type: cty.Bool, Optional: true, Computed: true},
+			"fail_apply": {Type: cty.Bool, Optional: true, Computed: true},
 		},
 	}
 
@@ -68,6 +78,10 @@ func NewProviderWithData(store *ResourceStore) *MockProvider {
 								Type:     cty.String,
 								Optional: true,
 							},
+							"ignored": {
+								Type:     cty.String,
+								Optional: true,
+							},
 						},
 					},
 				},
@@ -78,17 +92,31 @@ func NewProviderWithData(store *ResourceStore) *MockProvider {
 					"testing_deferred_resource": {
 						Block: DeferredResourceSchema,
 					},
+					"testing_failed_resource": {
+						Block: FailedResourceSchema,
+					},
 				},
 				DataSources: map[string]providers.Schema{
 					"testing_data_source": {
 						Block: TestingDataSourceSchema,
 					},
 				},
+				Functions: map[string]providers.FunctionDecl{
+					"echo": {
+						Parameters: []providers.FunctionParam{
+							{Name: "value", Type: cty.DynamicPseudoType},
+						},
+						ReturnType: cty.DynamicPseudoType,
+					},
+				},
+				ServerCapabilities: providers.ServerCapabilities{
+					MoveResourceState: true,
+				},
 			},
 			ConfigureProviderFn: func(request providers.ConfigureProviderRequest) providers.ConfigureProviderResponse {
 				// If configure_error is set, return an error.
 				err := request.Config.GetAttr("configure_error")
-				if !err.IsNull() {
+				if err.IsKnown() && !err.IsNull() {
 					return providers.ConfigureProviderResponse{
 						Diagnostics: tfdiags.Diagnostics{
 							tfdiags.AttributeValue(tfdiags.Error, err.AsString(), "configure_error attribute was set", cty.GetAttrPath("configure_error")),
@@ -126,6 +154,31 @@ func NewProviderWithData(store *ResourceStore) *MockProvider {
 					}
 				}
 
+				if request.TypeName == "testing_failed_resource" {
+					// First, populate the fail attributes with null if they are
+					// null
+					if value.GetAttr("fail_apply").IsNull() {
+						vals := value.AsValueMap()
+						vals["fail_apply"] = cty.False
+						value = cty.ObjectVal(vals)
+					}
+					if value.GetAttr("fail_plan").IsNull() {
+						vals := value.AsValueMap()
+						vals["fail_plan"] = cty.False
+						value = cty.ObjectVal(vals)
+					}
+
+					// If fail_plan is set, return a planned failure.
+					if value.GetAttr("fail_plan").True() {
+						return providers.PlanResourceChangeResponse{
+							PlannedState: value,
+							Diagnostics: tfdiags.Diagnostics{
+								tfdiags.Sourceless(tfdiags.Error, "planned failure", "plan failure"),
+							},
+						}
+					}
+				}
+
 				return providers.PlanResourceChangeResponse{
 					PlannedState: value,
 				}
@@ -133,7 +186,7 @@ func NewProviderWithData(store *ResourceStore) *MockProvider {
 			ApplyResourceChangeFn: func(request providers.ApplyResourceChangeRequest) providers.ApplyResourceChangeResponse {
 				if request.PlannedState.IsNull() {
 					// Deleting, so just update the store and return.
-					store.Delete(request.PlannedState.GetAttr("id").AsString())
+					store.Delete(request.PriorState.GetAttr("id").AsString())
 					return providers.ApplyResourceChangeResponse{
 						NewState: request.PlannedState,
 					}
@@ -149,6 +202,16 @@ func NewProviderWithData(store *ResourceStore) *MockProvider {
 					value = cty.ObjectVal(vals)
 				}
 
+				if request.TypeName == "testing_failed_resource" {
+					if value.GetAttr("fail_apply").True() {
+						return providers.ApplyResourceChangeResponse{
+							Diagnostics: tfdiags.Diagnostics{
+								tfdiags.Sourceless(tfdiags.Error, "planned failure", "apply failure"),
+							},
+						}
+					}
+				}
+
 				// Finally, update the store and return.
 				store.Set(value.GetAttr("id").AsString(), value)
 				return providers.ApplyResourceChangeResponse{
@@ -161,7 +224,18 @@ func NewProviderWithData(store *ResourceStore) *MockProvider {
 				id := request.PriorState.GetAttr("id").AsString()
 				value, exists := store.Get(id)
 				if !exists {
-					diags = diags.Append(tfdiags.Sourceless(tfdiags.Error, "not found", fmt.Sprintf("%q not found", id)))
+					// Then we'll just behave as if the resource was destroyed
+					// externally.
+					switch request.TypeName {
+					case "testing_failed_resource":
+						value = cty.NullVal(FailedResourceSchema.ImpliedType())
+					case "testing_deferred_resource":
+						value = cty.NullVal(DeferredResourceSchema.ImpliedType())
+					case "testing_resource":
+						value = cty.NullVal(TestingResourceSchema.ImpliedType())
+					default:
+						panic(fmt.Sprintf("unknown resource type %q", request.TypeName))
+					}
 				}
 				return providers.ReadResourceResponse{
 					NewState:    value,
@@ -198,6 +272,46 @@ func NewProviderWithData(store *ResourceStore) *MockProvider {
 							State:    value,
 						},
 					},
+				}
+			},
+			MoveResourceStateFn: func(request providers.MoveResourceStateRequest) providers.MoveResourceStateResponse {
+				if request.SourceTypeName != "testing_resource" && request.TargetTypeName != "testing_deferred_resource" {
+					return providers.MoveResourceStateResponse{
+						Diagnostics: tfdiags.Diagnostics{
+							tfdiags.Sourceless(tfdiags.Error, "unsupported", "unsupported move"),
+						},
+					}
+				}
+				// So, we know we're moving from `testing_resource` to
+				// `testing_deferred_resource`.
+
+				source, err := ctyjson.Unmarshal(request.SourceStateJSON, cty.Object(map[string]cty.Type{
+					"id":    cty.String,
+					"value": cty.String,
+				}))
+				if err != nil {
+					return providers.MoveResourceStateResponse{
+						Diagnostics: tfdiags.Diagnostics{
+							tfdiags.Sourceless(tfdiags.Error, "invalid source state", err.Error()),
+						},
+					}
+				}
+
+				target := cty.ObjectVal(map[string]cty.Value{
+					"id":       source.GetAttr("id"),
+					"value":    source.GetAttr("value"),
+					"deferred": cty.False,
+				})
+				store.Set(source.GetAttr("id").AsString(), target)
+
+				return providers.MoveResourceStateResponse{
+					TargetState: target,
+				}
+			},
+			CallFunctionFn: func(request providers.CallFunctionRequest) providers.CallFunctionResponse {
+				// Just echo the first argument back as the result.
+				return providers.CallFunctionResponse{
+					Result: request.Arguments[0],
 				}
 			},
 		},

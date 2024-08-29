@@ -6,6 +6,7 @@ package stackruntime
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/hashicorp/terraform/internal/addrs"
+	"github.com/hashicorp/terraform/internal/depsfile"
+	"github.com/hashicorp/terraform/internal/getproviders/providerreqs"
 	"github.com/hashicorp/terraform/internal/providers"
 	stacks_testing_provider "github.com/hashicorp/terraform/internal/stacks/stackruntime/testing"
 	"github.com/hashicorp/terraform/internal/tfdiags"
@@ -41,6 +44,7 @@ var (
 		"plan-variable-defaults":           {},
 		"variable-output-roundtrip":        {},
 		"variable-output-roundtrip-nested": {},
+		"aliased-provider":                 {},
 		filepath.Join("with-single-input", "input-from-component"): {},
 		filepath.Join("with-single-input", "input-from-component-list"): {
 			planInputVars: map[string]cty.Value{
@@ -107,12 +111,12 @@ var (
 				var diags tfdiags.Diagnostics
 				diags = diags.Append(&hcl.Diagnostic{
 					Severity: hcl.DiagError,
-					Summary:  "Component requires undeclared provider",
-					Detail:   "The root module for component.self requires a configuration for provider \"hashicorp/testing\", which isn't declared as a dependency of this stack configuration.\n\nDeclare this provider in the stack's required_providers block, and then assign a configuration for that provider in this component's \"providers\" argument.",
+					Summary:  "Reference to undeclared provider configuration",
+					Detail:   "There is no provider \"testing\" \"default\" block declared in this stack.",
 					Subject: &hcl.Range{
 						Filename: mainBundleSourceAddrStr("with-single-input/undeclared-provider/undeclared-provider.tfstack.hcl"),
-						Start:    hcl.Pos{Line: 5, Column: 1, Byte: 38},
-						End:      hcl.Pos{Line: 5, Column: 17, Byte: 54},
+						Start:    hcl.Pos{Line: 10, Column: 15, Byte: 163},
+						End:      hcl.Pos{Line: 10, Column: 39, Byte: 187},
 					},
 				})
 				return diags
@@ -140,7 +144,7 @@ var (
 				diags = diags.Append(&hcl.Diagnostic{
 					Severity: hcl.DiagError,
 					Summary:  "Invalid provider configuration",
-					Detail:   "The provider configuration slot testing requires a configuration for provider \"registry.terraform.io/hashicorp/testing\", not for provider \"terraform.io/builtin/testing\".",
+					Detail:   "The provider configuration slot \"testing\" requires a configuration for provider \"registry.terraform.io/hashicorp/testing\", not for provider \"terraform.io/builtin/testing\".",
 					Subject: &hcl.Range{
 						Filename: mainBundleSourceAddrStr("with-single-input/invalid-provider-type/invalid-provider-type.tfstack.hcl"),
 						Start:    hcl.Pos{Line: 22, Column: 15, Byte: 378},
@@ -230,6 +234,63 @@ var (
 				return diags
 			},
 		},
+		filepath.Join("with-single-input", "depends-on-invalid"): {
+			diags: func() tfdiags.Diagnostics {
+				var diags tfdiags.Diagnostics
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Invalid depends_on target",
+					Detail:   "The depends_on argument must refer to an embedded stack or component, but this reference refers to \"var.input\".",
+					Subject: &hcl.Range{
+						Filename: mainBundleSourceAddrStr("with-single-input/depends-on-invalid/depends-on-invalid.tfstack.hcl"),
+						Start:    hcl.Pos{Line: 22, Column: 17, Byte: 293},
+						End:      hcl.Pos{Line: 22, Column: 26, Byte: 302},
+					},
+				})
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Invalid depends_on target",
+					Detail:   "The depends_on argument must refer to an embedded stack or component, but this reference refers to \"var.input\".",
+					Subject: &hcl.Range{
+						Filename: mainBundleSourceAddrStr("with-single-input/depends-on-invalid/depends-on-invalid.tfstack.hcl"),
+						Start:    hcl.Pos{Line: 37, Column: 17, Byte: 509},
+						End:      hcl.Pos{Line: 37, Column: 26, Byte: 518},
+					},
+				})
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Invalid depends_on target",
+					Detail:   "The depends_on reference \"component.missing\" does not exist.",
+					Subject: &hcl.Range{
+						Filename: mainBundleSourceAddrStr("with-single-input/depends-on-invalid/depends-on-invalid.tfstack.hcl"),
+						Start:    hcl.Pos{Line: 22, Column: 28, Byte: 304},
+						End:      hcl.Pos{Line: 22, Column: 45, Byte: 321},
+					},
+				})
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Invalid depends_on target",
+					Detail:   "The depends_on reference \"stack.missing\" does not exist.",
+					Subject: &hcl.Range{
+						Filename: mainBundleSourceAddrStr("with-single-input/depends-on-invalid/depends-on-invalid.tfstack.hcl"),
+						Start:    hcl.Pos{Line: 37, Column: 28, Byte: 520},
+						End:      hcl.Pos{Line: 37, Column: 41, Byte: 533},
+					},
+				})
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagWarning,
+					Summary:  "Non-valid depends_on target",
+					Detail: "The depends_on argument should refer directly to an embedded stack or component in configuration, but this reference is too deep.\n\n" +
+						"Terraform Stacks has simplified the reference to the nearest valid target, \"component.first\". To remove this warning, update the configuration to the same target.",
+					Subject: &hcl.Range{
+						Filename: mainBundleSourceAddrStr("with-single-input/depends-on-invalid/depends-on-invalid.tfstack.hcl"),
+						Start:    hcl.Pos{Line: 52, Column: 17, Byte: 722},
+						End:      hcl.Pos{Line: 52, Column: 32, Byte: 737},
+					},
+				})
+				return diags
+			},
+		},
 	}
 )
 
@@ -250,6 +311,19 @@ func TestValidate_valid(t *testing.T) {
 
 			ctx := context.Background()
 			cfg := loadMainBundleConfigForTest(t, name)
+			lock := depsfile.NewLocks()
+			lock.SetProvider(
+				addrs.NewDefaultProvider("testing"),
+				providerreqs.MustParseVersion("0.0.0"),
+				providerreqs.MustParseVersionConstraints("=0.0.0"),
+				providerreqs.PreferredHashes([]providerreqs.Hash{}),
+			)
+			lock.SetProvider(
+				addrs.NewDefaultProvider("other"),
+				providerreqs.MustParseVersion("0.0.0"),
+				providerreqs.MustParseVersionConstraints("=0.0.0"),
+				providerreqs.PreferredHashes([]providerreqs.Hash{}),
+			)
 
 			diags := Validate(ctx, &ValidateRequest{
 				Config: cfg,
@@ -264,7 +338,13 @@ func TestValidate_valid(t *testing.T) {
 					addrs.NewBuiltInProvider("testing"): func() (providers.Interface, error) {
 						return stacks_testing_provider.NewProvider(), nil
 					},
+					// We also support an "other" provider out of the box to
+					// test the provider aliasing feature.
+					addrs.NewDefaultProvider("other"): func() (providers.Interface, error) {
+						return stacks_testing_provider.NewProvider(), nil
+					},
 				},
+				DependencyLocks: *lock,
 			})
 
 			// The following will fail the test if there are any error
@@ -293,6 +373,14 @@ func TestValidate_invalid(t *testing.T) {
 			ctx := context.Background()
 			cfg := loadMainBundleConfigForTest(t, name)
 
+			lock := depsfile.NewLocks()
+			lock.SetProvider(
+				addrs.NewDefaultProvider("testing"),
+				providerreqs.MustParseVersion("0.0.0"),
+				providerreqs.MustParseVersionConstraints("=0.0.0"),
+				providerreqs.PreferredHashes([]providerreqs.Hash{}),
+			)
+
 			gotDiags := Validate(ctx, &ValidateRequest{
 				Config: cfg,
 				ProviderFactories: map[addrs.Provider]providers.Factory{
@@ -307,7 +395,13 @@ func TestValidate_invalid(t *testing.T) {
 						return stacks_testing_provider.NewProvider(), nil
 					},
 				},
+				DependencyLocks: *lock,
 			}).ForRPC()
+
+			// Let's make the returned diagnostics stable so that we can
+			// compare them easily.
+			sort.SliceStable(gotDiags, diagnosticSortFunc(gotDiags))
+
 			wantDiags := tc.diags().ForRPC()
 
 			if diff := cmp.Diff(wantDiags, gotDiags); diff != "" {
@@ -354,5 +448,118 @@ Terraform uses references to decide a suitable order for performing operations, 
 
 	if diff := cmp.Diff(wantDiags, gotDiags); diff != "" {
 		t.Errorf("wrong diagnostics\n%s", diff)
+	}
+}
+
+func TestValidate_missing_provider_from_lockfile(t *testing.T) {
+	ctx := context.Background()
+	cfg := loadMainBundleConfigForTest(t, filepath.Join("with-single-input", "input-from-component"))
+	lock := depsfile.NewLocks()
+
+	diags := Validate(ctx, &ValidateRequest{
+		Config: cfg,
+		ProviderFactories: map[addrs.Provider]providers.Factory{
+			// We support both hashicorp/testing and
+			// terraform.io/builtin/testing as providers. This lets us
+			// test the provider aliasing feature. Both providers
+			// support the same set of resources and data sources.
+			addrs.NewDefaultProvider("testing"): func() (providers.Interface, error) {
+				return stacks_testing_provider.NewProvider(), nil
+			},
+			addrs.NewBuiltInProvider("testing"): func() (providers.Interface, error) {
+				return stacks_testing_provider.NewProvider(), nil
+			},
+		},
+		DependencyLocks: *lock,
+	})
+
+	if len(diags) != 1 {
+		t.Fatalf("expected exactly one diagnostic, got %d", len(diags))
+	}
+
+	diag := diags[0]
+	if diag.Severity() != tfdiags.Error {
+		t.Fatalf("expected error diagnostic, got %s", diag.Severity())
+	}
+
+	if diag.Description().Summary != "Provider missing from lockfile" {
+		t.Fatalf("expected diagnostic summary 'Provider missing from lockfile', got %q", diag.Description().Summary)
+	}
+
+	if diag.Description().Detail != "Provider \"registry.terraform.io/hashicorp/testing\" is not in the lockfile. This provider must be in the lockfile to be used in the configuration. Please run `tfstacks providers lock` to update the lockfile and run this operation again with an updated configuration." {
+		t.Fatalf("expected diagnostic detail to be a specific message, got %q", diag.Description().Detail)
+	}
+}
+
+func TestValidate_impliedProviderTypes(t *testing.T) {
+
+	tcs := []struct {
+		directory string
+		providers map[addrs.Provider]providers.Factory
+		wantDiags func() tfdiags.Diagnostics
+	}{
+		{
+			directory: "with-hashicorp-provider",
+			providers: map[addrs.Provider]providers.Factory{
+				addrs.NewDefaultProvider("testing"): func() (providers.Interface, error) {
+					return stacks_testing_provider.NewProvider(), nil
+				},
+			},
+		},
+		{
+			directory: "with-non-hashicorp-provider",
+			providers: map[addrs.Provider]providers.Factory{
+				addrs.NewProvider(addrs.DefaultProviderRegistryHost, "other", "testing"): func() (providers.Interface, error) {
+					return stacks_testing_provider.NewProvider(), nil
+				},
+			},
+			wantDiags: func() tfdiags.Diagnostics {
+				var diags tfdiags.Diagnostics
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Invalid provider configuration",
+					Detail: "The provider configuration slot \"testing\" requires a configuration for provider \"registry.terraform.io/hashicorp/testing\", not for provider \"registry.terraform.io/other/testing\"." +
+						"\n\nThe module does not declare a source address for \"testing\" in its required_providers block, so Terraform assumed \"hashicorp/testing\" for backward-compatibility with older versions of Terraform",
+					Subject: &hcl.Range{
+						Filename: mainBundleSourceAddrStr("legacy-module/with-non-hashicorp-provider/with-non-hashicorp-provider.tfstack.hcl"),
+						Start:    hcl.Pos{Line: 21, Column: 15, Byte: 447},
+						End:      hcl.Pos{Line: 21, Column: 39, Byte: 471},
+					},
+				})
+				return diags
+			},
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.directory, func(t *testing.T) {
+
+			ctx := context.Background()
+			lock := depsfile.NewLocks()
+			for addr := range tc.providers {
+				lock.SetProvider(
+					addr,
+					providerreqs.MustParseVersion("0.0.0"),
+					providerreqs.MustParseVersionConstraints("=0.0.0"),
+					providerreqs.PreferredHashes([]providerreqs.Hash{}),
+				)
+			}
+
+			cfg := loadMainBundleConfigForTest(t, filepath.Join("legacy-module", tc.directory))
+			gotDiags := Validate(ctx, &ValidateRequest{
+				Config:            cfg,
+				ProviderFactories: tc.providers,
+				DependencyLocks:   *lock,
+			}).ForRPC()
+
+			wantDiags := tfdiags.Diagnostics{}.ForRPC()
+			if tc.wantDiags != nil {
+				wantDiags = tc.wantDiags().ForRPC()
+			}
+
+			if diff := cmp.Diff(wantDiags, gotDiags); diff != "" {
+				t.Errorf("wrong diagnostics\n%s", diff)
+			}
+		})
 	}
 }

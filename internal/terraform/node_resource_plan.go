@@ -103,8 +103,8 @@ func (n *nodeExpandPlannableResource) DynamicExpand(ctx EvalContext) (*Graph, tf
 	// resource. The config maybe nil if we are generating configuration, or
 	// deleting a resource.
 	if n.Config != nil {
-		diags = diags.Append(validateSelfRefInExpr(n.Addr.Resource, n.Config.Count))
-		diags = diags.Append(validateSelfRefInExpr(n.Addr.Resource, n.Config.ForEach))
+		diags = diags.Append(validateMetaSelfRef(n.Addr.Resource, n.Config.Count))
+		diags = diags.Append(validateMetaSelfRef(n.Addr.Resource, n.Config.ForEach))
 		if diags.HasErrors() {
 			return nil, diags
 		}
@@ -177,16 +177,18 @@ func (n *nodeExpandPlannableResource) expandResourceImports(ctx EvalContext, all
 		}
 
 		if imp.Config.ForEach == nil {
-			importID, evalDiags := evaluateImportIdExpression(imp.Config.ID, ctx, EvalDataForNoInstanceKey, allowUnknown)
-			diags = diags.Append(evalDiags)
-			if diags.HasErrors() {
-				return knownImports, unknownImports, diags
-			}
-
 			traversal, hds := hcl.AbsTraversalForExpr(imp.Config.To)
 			diags = diags.Append(hds)
 			to, tds := addrs.ParseAbsResourceInstance(traversal)
 			diags = diags.Append(tds)
+			if diags.HasErrors() {
+				return knownImports, unknownImports, diags
+			}
+
+			diags = diags.Append(validateImportTargetExpansion(n.Config, to, imp.Config.To))
+
+			importID, evalDiags := evaluateImportIdExpression(imp.Config.ID, ctx, EvalDataForNoInstanceKey, allowUnknown)
+			diags = diags.Append(evalDiags)
 			if diags.HasErrors() {
 				return knownImports, unknownImports, diags
 			}
@@ -242,6 +244,8 @@ func (n *nodeExpandPlannableResource) expandResourceImports(ctx EvalContext, all
 				return knownImports, unknownImports, diags
 			}
 
+			diags = diags.Append(validateImportTargetExpansion(n.Config, res, imp.Config.To))
+
 			importID, evalDiags := evaluateImportIdExpression(imp.Config.ID, ctx, keyData, allowUnknown)
 			diags = diags.Append(evalDiags)
 			if diags.HasErrors() {
@@ -280,6 +284,20 @@ func (n *nodeExpandPlannableResource) validateExpandedImportTargets(expandedImpo
 				"Configuration for import target does not exist",
 				fmt.Sprintf("The configuration for the given import %s does not exist. All target instances must have an associated configuration to be imported.", addr),
 			))
+			return diags
+		}
+
+		if n.Config == nil && n.generateConfigPath == "" && len(n.importTargets) == 1 {
+			// we have no config and aren't generating any. This isn't caught during
+			// validation because generateConfigPath is only a plan option. If we
+			// got this far however, it means this node is eligible for config
+			// generation, so suggest it to the user.
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Configuration for import target does not exist",
+				Detail:   fmt.Sprintf("The configuration for the given import target %s does not exist. If you wish to automatically generate config for this resource, use the -generate-config-out option within terraform plan. Otherwise, make sure the target resource exists within your configuration. For example:\n\n  terraform plan -generate-config-out=generated.tf", n.Addr),
+				Subject:  n.importTargets[0].Config.To.Range().Ptr(),
+			})
 			return diags
 		}
 	}

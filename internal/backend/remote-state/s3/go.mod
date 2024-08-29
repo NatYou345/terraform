@@ -1,6 +1,6 @@
 module github.com/hashicorp/terraform/internal/backend/remote-state/s3
 
-go 1.22.4
+go 1.22.5
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.25.3
@@ -11,11 +11,11 @@ require (
 	github.com/aws/smithy-go v1.20.1
 	github.com/google/go-cmp v0.6.0
 	github.com/hashicorp/aws-sdk-go-base/v2 v2.0.0-beta.45
-	github.com/hashicorp/go-hclog v1.5.0
+	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-uuid v1.0.3
 	github.com/hashicorp/hcl/v2 v2.21.0
 	github.com/hashicorp/terraform v0.0.0-00010101000000-000000000000
-	github.com/zclconf/go-cty v1.14.4
+	github.com/zclconf/go-cty v1.15.0
 )
 
 require (
@@ -63,7 +63,7 @@ require (
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
 	golang.org/x/mod v0.16.0 // indirect
 	golang.org/x/net v0.23.0 // indirect
-	golang.org/x/sys v0.19.0 // indirect
+	golang.org/x/sys v0.20.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.19.0 // indirect
 )
